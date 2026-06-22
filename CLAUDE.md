@@ -57,7 +57,7 @@ independent, which removes the main spill risk. Day 1 is the highest-risk day an
 the most likely place the slack gets spent.
 
 - **Day 1 (GMG + solver, in parallel):**
-  - *Person A:* confirm the baseline trains (`python train.py`), then tune
+  - *Person A:* confirm the baseline trains (run `run.py` cell-by-cell), then tune
     rewards/discount until a random-trained agent demonstrably **misgeneralises**
     (competent, but walks around a hand-built urn-wall). This is the make-or-break
     GATE — lots of waiting on training runs.
@@ -88,7 +88,8 @@ flat (`from potteryshop import ...`); **run scripts from this directory**.
 | `evaluation.py` | `RewardFunction`, `compute_return`, `evaluate_behaviour`. |
 | `rewards.py` | `reward2` (intended reward) + chain, `DISCOUNT_RATE`. |
 | `generate.py` | `generate()` — FIXED-bin random layout distribution. |
-| `train.py` | `train_agent_multienv()` + runnable demo. |
+| `train.py` | `train_agent_multienv()`, `default_device()` — reusable library, no driver code. |
+| `run.py` | Interactive `# %%` driver: build → train → plot → evaluate. Imports from the rest. |
 
 Smoke-tested on CUDA: trains across 32 parallel envs, return climbs.
 

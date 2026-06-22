@@ -4,16 +4,14 @@ Train one agent across many environments at once, on GPU.
 Each training step samples a fresh batch of random layouts from `gen`, moves
 them onto the training device, and performs one multi-environment PPO update.
 The notebook's live plotting is replaced with plain headless metric logging so
-this runs cleanly as a script on a GPU box.
+this runs cleanly on a GPU box.
 
-Run the bundled demo (fixed-bin generator, intended reward) with:
-
-    python train.py
+This module is a library of reusable functions (`train_agent_multienv`,
+`default_device`); see `run.py` for an interactive driver with `# %%` cells.
 """
 
 from __future__ import annotations
 
-import functools
 from typing import Callable
 
 import torch
@@ -21,10 +19,9 @@ from tqdm import tqdm
 
 from agent import ActorCriticNetwork
 from evaluation import RewardFunction
-from generate import generate
-from potteryshop import Action, Environment
+from potteryshop import Environment
 from ppo import ppo_train_step_multienv
-from rewards import DISCOUNT_RATE, reward2
+from rewards import DISCOUNT_RATE
 
 
 def default_device() -> torch.device:
@@ -95,39 +92,3 @@ def train_agent_multienv(
             )
 
     return net, history
-
-
-if __name__ == "__main__":
-    # Demo: train on the fixed-bin distribution with the intended reward.
-    # (Mirrors the notebook's `net3` configuration.)
-    world_size = 4
-    device = default_device()
-    print(f"training on {device}")
-
-    net = ActorCriticNetwork.init(
-        obs_height=world_size,
-        obs_width=world_size,
-        net_channels=16,
-        net_width=64,
-        num_conv_layers=5,
-        num_dense_layers=2,
-        num_actions=len(Action),
-        generator=torch.Generator().manual_seed(1),
-    )
-
-    net, history = train_agent_multienv(
-        gen=functools.partial(
-            generate,
-            world_size=world_size,
-            num_shards=4,
-            num_urns=2,
-        ),
-        net=net,
-        reward_fn=reward2,
-        num_train_steps=4096,
-        device=device,
-        seed=1,
-    )
-
-    final = sum(m["return"] for m in history[-32:]) / min(32, len(history))
-    print(f"done. mean return over last 32 steps: {final:+.3f}")

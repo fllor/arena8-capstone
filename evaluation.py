@@ -51,6 +51,7 @@ def evaluate_behaviour(
     num_rollouts: int = 1000,
     discount_rate: float = 0.995,
     generator: torch.Generator | None = None,
+    deterministic: bool = True,
 ) -> Float[Tensor, "num_rollouts"]:
     """
     Sample `num_rollouts` trajectories from the policy and score each one
@@ -58,6 +59,13 @@ def evaluate_behaviour(
 
     The environment is moved onto the network's device automatically, so a CPU
     layout can be evaluated against a network trained on the GPU.
+
+    By default actions are taken greedily (`deterministic=True`): this measures
+    the policy's actual learned behaviour without exploration noise, and matches
+    the deterministic oracle optimum used for regret. Note that greedy rollouts
+    from the same layout are identical, so `num_rollouts` can be set to 1 unless
+    the layouts themselves differ. Pass `deterministic=False` to recover the
+    old stochastic-sampling behaviour.
     """
     device = next(net.parameters()).device
     rollouts = collect_rollout(
@@ -67,6 +75,7 @@ def evaluate_behaviour(
         num_rollouts=num_rollouts,
         generator=generator,
         device=device,
+        deterministic=deterministic,
     )
     # apply the reward function to all B*T transitions at once
     transitions = tree_map(

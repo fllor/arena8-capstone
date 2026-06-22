@@ -20,7 +20,7 @@ import visualise
 from agent import ActorCriticNetwork
 from evaluation import compute_return, evaluate_behaviour
 from generate import generate
-from potteryshop import Action, collect_rollout, tree_map
+from potteryshop import Action, Environment, collect_rollout, tree_map
 from rewards import reward2, reward_break
 from solver import compute_optimal_return
 from train import default_device, train_agent_multienv
@@ -145,6 +145,7 @@ rollout = collect_rollout(
     num_steps=watch_steps,
     generator=torch.Generator().manual_seed(3),
     device=device,
+    deterministic=True
 )
 
 # Optimal return (oracle) vs the return actually achieved in the rollout above.
@@ -169,4 +170,26 @@ print(
 
 visualise.display_rollouts(watch_envs, rollout, grid_width=grid_width)
 
+# %%
+# Test walking around wall
+env_probe = Environment(
+    init_robot_pos=torch.tensor((0, 0), dtype=torch.long),
+    init_items_map=torch.tensor(
+        (
+            (0, 2, 1, 1),
+            (0, 2, 1, 1),
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+        ),
+        dtype=torch.long,
+    ),
+    bin_pos=torch.tensor((0, 0), dtype=torch.long),
+)
+rollout = collect_rollout(
+    env=env_probe.to(device),
+    policy_fn=net.policy,
+    num_steps=64,
+    generator=torch.Generator().manual_seed(0),
+)
+visualise.display_rollout(env_probe, rollout)
 # %%

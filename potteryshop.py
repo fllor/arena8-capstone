@@ -381,6 +381,7 @@ def collect_rollout(
     num_rollouts: int | None = None,
     generator: torch.Generator | None = None,
     device: torch.device | None = None,
+    deterministic: bool = False,
 ) -> Rollout:
     """
     Sample `num_rollouts` parallel trajectories of `num_steps` interactions
@@ -389,6 +390,12 @@ def collect_rollout(
 
     If `device` is given, the environment is moved there first, so the policy
     network (which must be on the same device) sees on-device observations.
+
+    If `deterministic`, each action is the argmax of the policy distribution
+    instead of a sample from it. This is the right choice for *evaluating* a
+    trained policy: it strips the exploration noise PPO deliberately keeps
+    during training, removing the random back-and-forth that would otherwise
+    waste steps (and discounted return) at deployment.
     """
     if device is not None:
         env = env.to(device)
@@ -397,8 +404,11 @@ def collect_rollout(
     for _ in range(num_steps):
         obs = env.observe(state)
         action_logits = policy_fn(obs)
-        action_probs = torch.softmax(action_logits, dim=-1)
-        action = _sample_actions(action_probs, generator)
+        if deterministic:
+            action = action_logits.argmax(dim=-1)
+        else:
+            action_probs = torch.softmax(action_logits, dim=-1)
+            action = _sample_actions(action_probs, generator)
         next_state = env.step(state, action)
         transitions.append(
             Transition(state=state, action=action, next_state=next_state)

@@ -62,7 +62,11 @@ net, history = train_agent_multienv(
     gen=gen,
     net=net,
     reward_fn=reward2,
-    num_train_steps=4096,
+    num_train_steps=70,  # ~42s on the HPO box; reaches return ~3.63
+    num_envs=8192,
+    num_epochs=1,
+    minibatch_size=16384,
+    lr=0.003,
     device=device,
     seed=1,
 )

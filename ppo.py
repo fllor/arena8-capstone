@@ -40,11 +40,19 @@ def ppo_train_step_multienv(
     critic_coeff: float = 0.5,
     entropy_coeff: float = 0.001,
     max_grad_norm: float = 0.5,
+    num_epochs: int = 4,
+    minibatch_size: int = 4096,
     generator: torch.Generator | None = None,
 ) -> dict[str, float]:
     """
     One PPO training step across a batch of environments: collect one rollout
-    in each environment, then update `net` in place. Returns training metrics.
+    in each environment, then update `net` in place with `num_epochs` passes of
+    minibatch SGD over the collected experience. Each pass shuffles the
+    `N = num_envs * num_env_steps` transitions and splits them into minibatches
+    of `minibatch_size` (so the number of gradient updates grows with the
+    batch -- a fixed minibatch *count* would instead give ever-larger, ever-
+    fewer updates as `num_envs` grows, and the policy barely moves). Returns
+    training metrics (losses/diagnostics averaged over all minibatch updates).
     """
     assert envs.num_envs is not None, (
         "got a single environment; add a batch dimension to the environment "
@@ -79,24 +87,54 @@ def ppo_train_step_multienv(
         eligibility_rate=eligibility_rate,
         discount_rate=discount_rate,
     )
-    # update the policy on the collected experience...
-    loss, aux = ppo_loss_fn(
-        net=net,
-        transitions=rollouts.transitions,
-        advantages=advantages,
-        proximity_eps=proximity_eps,
-        critic_coeff=critic_coeff,
-        entropy_coeff=entropy_coeff,
-    )
-    optimiser.zero_grad()
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(net.parameters(), max_grad_norm)
-    optimiser.step()
-    # metrics
+    # update the policy with several epochs of minibatch SGD over the collected
+    # experience. `flat_transitions` already carries the collection-time
+    # ("old") action logits and value predictions, which stay fixed across
+    # epochs while `net` is updated -- the clipped surrogate keeps each update
+    # proximal to that fixed reference policy.
+    flat_advantages = advantages.flatten()
+    N = flat_advantages.shape[0]
+    mb_size = max(1, min(minibatch_size, N))
+    device = flat_advantages.device
+
+    loss_sum = 0.0
+    aux_sum: dict[str, float] = {}
+    num_updates = 0
+    for _epoch in range(num_epochs):
+        # shuffle once per epoch; build the permutation on the generator's own
+        # device (so randperm and the generator agree), then move it onto the
+        # data device -- this keeps a CPU generator able to drive a CUDA update
+        gen_device = generator.device if generator is not None else device
+        perm = torch.randperm(N, generator=generator, device=gen_device)
+        if perm.device != device:
+            perm = perm.to(device)
+        for start in range(0, N, mb_size):
+            idx = perm[start : start + mb_size]
+            mb_transitions = tree_map(lambda x: x[idx], flat_transitions)
+            mb_advantages = flat_advantages[idx]
+            loss, aux = ppo_loss_fn(
+                net=net,
+                transitions=mb_transitions,
+                advantages=mb_advantages,
+                proximity_eps=proximity_eps,
+                critic_coeff=critic_coeff,
+                entropy_coeff=entropy_coeff,
+            )
+            optimiser.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_grad_norm)
+            optimiser.step()
+            loss_sum += loss.item()
+            for k, v in aux.items():
+                aux_sum[k] = aux_sum.get(k, 0.0) + v
+            num_updates += 1
+
+    # metrics (losses/diagnostics averaged over all minibatch updates; return
+    # is measured once on the freshly collected experience)
     train_metrics = {
-        "loss": loss.item(),
+        "loss": loss_sum / num_updates,
         "return": compute_return(rewards, discount_rate).mean().item(),
-        **aux,
+        **{k: v / num_updates for k, v in aux_sum.items()},
     }
     return train_metrics
 
@@ -107,18 +145,14 @@ def ppo_train_step_multienv(
 
 def ppo_loss_fn(
     net: ActorCriticNetwork,
-    transitions: AnnotatedTransition,  # leading dims (B, num_steps)
-    advantages: Float[Tensor, "B num_steps"],
+    transitions: AnnotatedTransition,  # single leading dim (minibatch)
+    advantages: Float[Tensor, "minibatch"],
     proximity_eps: float,
     critic_coeff: float,
     entropy_coeff: float,
 ) -> tuple[Float[Tensor, ""], dict[str, float]]:
-    # reshape the data to have one batch dimension
-    transitions = tree_map(
-        lambda x: x.flatten(start_dim=0, end_dim=1),
-        transitions,
-    )
-    advantages = advantages.flatten()
+    # `transitions`/`advantages` already have a single (flat) batch dimension;
+    # the caller flattens the (B, num_steps) rollout and slices minibatches.
     batch_size = advantages.shape[0]
     batch = torch.arange(batch_size, device=advantages.device)
 

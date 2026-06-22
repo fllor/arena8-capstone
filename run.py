@@ -31,15 +31,20 @@ print(f"using device: {device}")
 # %%
 # Configuration
 
+# Mean shard/urn COUNT per env (each floored at 1, drawn from a truncated
+# geometric — most layouts stay sparse, dense urn-walls keep a small non-zero
+# probability in the tail). `urn_mean` is the key knob: keep it low so "walk
+# around urns" is almost always optimal (the GMG proxy forms and forced walls
+# stay RARE — that rarity is exactly what PLR⊥ has to overcome). Raise it if you
+# want walls to show up more often in random eval. On 5x5 a wall needs ~5 urns,
+# so walls live in the geometric tail.
 world_size = 4
-# mean number of shards and urns per environment (each floored at 1, so every
-# level has a shard to deliver and an urn to navigate around). Counts are drawn
-# from truncated geometric distributions, so most layouts stay sparse but dense
-# urn-walls keep a non-zero (vanishingly small) probability. Keep urn_mean low:
-# training must make "walk around urns" almost always optimal for the GMG proxy
-# to form.
-shard_mean = 1.7
-urn_mean = 1.3
+if world_size == 4:
+    shard_mean = 1.7
+    urn_mean = 1.3
+elif world_size == 5:
+    shard_mean = 2.0
+    urn_mean = 1.7
 
 # Where to save/load the trained network. Set LOAD_AGENT = True to skip training
 # and load weights from MODEL_PATH instead (the architecture below must match the
@@ -128,6 +133,7 @@ for (name, reward_fn), ax in zip(probes.items(), axes):
         net=net,
         reward_fn=reward_fn,
         num_rollouts=num_eval,
+        discount_rate=DISCOUNT_RATE,
         generator=torch.Generator().manual_seed(0),
     )
     print(f"{name:>12}: mean return {scores.mean().item():+.3f}")

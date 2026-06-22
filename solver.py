@@ -51,12 +51,14 @@ from jaxtyping import Float, Int
 from torch import Tensor
 
 from potteryshop import Action, Environment, Item
-from rewards import DISCOUNT_RATE
+from rewards import DISCOUNT_RATE, STEP_COST, WASTE_PENALTY
 
 # Constants mirroring `rewards.reward2` (keep in sync with rewards.py).
 _BIN_REWARD = 1.0       # reward_bin: +1 per delivery
-_BREAK_PENALTY = 2.0    # reward_no_break: -2 per urn smashed
+_BREAK_PENALTY = 3.0    # reward_no_break: -3 per urn smashed
 _SHAPING_COEFF = 0.5    # reward_shaped divides the pickup-shaping term by 2
+_STEP_COST = STEP_COST  # reward_step_cost: -STEP_COST per step while unfinished
+_WASTE_PENALTY = WASTE_PENALTY  # reward_waste: -WASTE_PENALTY per no-effect action
 
 # (row, col) deltas per Action, matching potteryshop.step.
 _DELTAS = [(-1, 0), (0, -1), (+1, 0), (0, +1), (0, 0), (0, 0)]
@@ -152,6 +154,16 @@ def _build_transitions(
 
     pow3 = (3 ** torch.arange(max(U, 1), device=device)).long()  # [U] (>=1 entry)
 
+    # Step cost gate: the task is "unfinished" in the current state if an original
+    # shard remains (shardmask != 0), a shard is held (holding == 1), or a smashed
+    # urn pile is still on the floor (any urn trit == 1). Mirrors
+    # `rewards.reward_step_cost`, which charges on the pre-transition state.
+    has_pile = torch.zeros(N, dtype=torch.bool, device=device)
+    for u in range(U):
+        has_pile = has_pile | ((urncode // pow3[u]) % 3 == 1)
+    unfinished = (shardmask != 0) | (holding == 1) | has_pile  # [N]
+    step_term = per_step_cost * unfinished.float()  # [N], broadcasts over [B, N]
+
     next_idx = torch.empty((B, N, 6), dtype=torch.long, device=device)
     reward = torch.empty((B, N, 6), dtype=torch.float32, device=device)
 
@@ -187,7 +199,9 @@ def _build_transitions(
             new_shardmask = shardmask_b
             new_urncode = urncode_after
             shaping = (discount * new_holding.float() - holding_b.float()) * _SHAPING_COEFF
-            rew = reward_smash + shaping - per_step_cost
+            # wasted move: the robot bumped a grid edge (position unchanged).
+            wall_bump = (dest == cur).float()  # [N], broadcasts over [B, N]
+            rew = reward_smash + shaping - step_term - _WASTE_PENALTY * wall_bump
 
         elif a == Action.PICKUP:
             new_robot = robot[None, :].expand(B, N)
@@ -208,7 +222,8 @@ def _build_transitions(
             pick_urn = can_pickup & urn_here
             new_urncode = urncode_b + pick_urn.long() * upow  # trit 1 -> 2
             shaping = (discount * new_holding.float() - holding_b.float()) * _SHAPING_COEFF
-            rew = shaping - per_step_cost
+            # wasted PICKUP: nothing was picked up (inventory unchanged).
+            rew = shaping - step_term - _WASTE_PENALTY * (~can_pickup).float()
 
         else:  # Action.PUTDOWN
             new_robot = robot[None, :].expand(B, N)
@@ -217,7 +232,9 @@ def _build_transitions(
             new_shardmask = shardmask_b
             new_urncode = urncode_b  # non-bin putdowns modelled as no-ops (never optimal)
             shaping = (discount * new_holding.float() - holding_b.float()) * _SHAPING_COEFF
-            rew = _BIN_REWARD * deliver.float() + shaping - per_step_cost
+            # wasted PUTDOWN: nothing was delivered (inventory unchanged). The
+            # optimal never floor-drops, so this matches reward_waste on-policy.
+            rew = _BIN_REWARD * deliver.float() + shaping - step_term - _WASTE_PENALTY * (~deliver).float()
 
         nxt = ((new_robot * 2 + new_holding) * M_shard + new_shardmask) * M_urn + new_urncode
         next_idx[:, :, a] = nxt
@@ -232,7 +249,7 @@ def compute_optimal_return(
     discount_rate: float = DISCOUNT_RATE,
     horizon: int = 64,
     break_penalty: float = _BREAK_PENALTY,
-    per_step_cost: float = 0.0,
+    per_step_cost: float = _STEP_COST,
     device: torch.device | str | None = None,
     chunk_size: int = 512,
 ) -> Float[Tensor, "B"]:
@@ -308,7 +325,7 @@ def _validate(envs: Environment, horizon: int = 64, discount: float = DISCOUNT_R
         _layout_tables(envs, device)
     )
     next_idx, reward, M_shard, M_urn, N = _build_transitions(
-        shard_slot, urn_slot, bin_cell, S, U, C, W, discount, _BREAK_PENALTY, 0.0, device,
+        shard_slot, urn_slot, bin_cell, S, U, C, W, discount, _BREAK_PENALTY, _STEP_COST, device,
     )
     # store every V_t so we can extract the greedy action at each step
     V_stack = [torch.zeros((B, N), dtype=torch.float32, device=device)]
@@ -372,9 +389,9 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     g = torch.Generator().manual_seed(0)
 
-    print("random fixed-bin layouts (4x4, shard_mean=2, urn_mean=0.7):")
+    print("random fixed-bin layouts (4x4, shard_mean=1.7, urn_mean=1.3):")
     envs = generate(
-        world_size=4, shard_mean=2.0, urn_mean=0.7, num_envs=64, generator=g
+        world_size=4, shard_mean=1.7, urn_mean=1.3, num_envs=64, generator=g
     )
     opt = compute_optimal_return(envs)
     print(f"  optimal return: mean {opt.mean():+.3f}  min {opt.min():+.3f}  max {opt.max():+.3f}")

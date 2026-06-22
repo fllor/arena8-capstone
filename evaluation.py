@@ -18,6 +18,7 @@ from torch import Tensor
 
 from agent import ActorCriticNetwork
 from potteryshop import Environment, State, collect_rollout, tree_map
+from rewards import DISCOUNT_RATE
 
 RewardFunction = Callable[
     [State, Int[Tensor, "B"], State],
@@ -49,7 +50,7 @@ def evaluate_behaviour(
     reward_fn: RewardFunction,
     num_steps: int = 64,
     num_rollouts: int = 1000,
-    discount_rate: float = 0.995,
+    discount_rate: float = DISCOUNT_RATE,
     generator: torch.Generator | None = None,
     deterministic: bool = True,
 ) -> Float[Tensor, "num_rollouts"]:

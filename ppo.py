@@ -26,6 +26,7 @@ from potteryshop import (
     collect_annotated_rollout,
     tree_map,
 )
+from rewards import DISCOUNT_RATE
 
 
 def ppo_train_step_multienv(
@@ -34,7 +35,7 @@ def ppo_train_step_multienv(
     reward_fn: RewardFunction,
     optimiser: torch.optim.Optimizer,
     num_env_steps: int = 64,
-    discount_rate: float = 0.995,
+    discount_rate: float = DISCOUNT_RATE,
     eligibility_rate: float = 0.95,
     proximity_eps: float = 0.1,
     critic_coeff: float = 0.5,

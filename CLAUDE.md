@@ -7,7 +7,7 @@ in the "pottery shop" gridworld, then **mitigate it with regret-based UED**
 ## The story we are demonstrating
 
 - The robot navigates a gridworld. Stepping onto an **urn** smashes it into
-  shards. There is a **break penalty** (`reward_no_break = -2 * reward_break`).
+  shards. There is a **break penalty** (`reward_no_break = -3 * reward_break`).
 - In **random training** layouts, urns are scattered, so walking *around* them is
   almost always optimal and breaking is almost never worth it.
 - At **deployment**, urns can form a **wall** between robot and bin, where

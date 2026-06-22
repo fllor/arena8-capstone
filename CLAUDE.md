@@ -113,11 +113,28 @@ and prints progress every `log_every` steps. Device is a parameter
 device-independent reproducibility. Only the fixed-bin `generate` is included.
 
 ## Environment cheat-sheet (`potteryshop.py`)
-- `Item`: EMPTY=0, SHARDS=1, URN=2. `Action`: WAIT, UP, LEFT, DOWN, RIGHT, PICKUP, PUTDOWN.
+- `Item`: EMPTY=0, SHARDS=1, URN=2. `Action` (6, no WAIT): UP=0, LEFT=1, DOWN=2,
+  RIGHT=3, PICKUP=4, PUTDOWN=5. PICKUP/PUTDOWN leave the robot in place.
 - Batched: every `State`/`Environment` field has a leading batch dim `B`; `step`
   advances all envs at once. No walls — grid edges clamp movement; **stepping onto
   an urn smashes it to shards** (free mechanically; the penalty is in the reward).
-- Obs: bool grid `[B, ws, ws, 4]` (robot/bin/shards/urns) + inventory vec `[B, 2]`.
+- **Inventory holds one shard-pile at a time** (`inventory: int[B]`; PICKUP only
+  fires when empty). With `num_shards > 1` the optimal policy is one round-trip to
+  the bin *per pile* — the oracle solver must route over all piles, not take a
+  single shortest path. (Use `num_shards=1` to keep single-path Dijkstra correct.)
+- **A smashed urn becomes a real shard pile the optimal must clean up.** Stepping
+  onto an urn pays `-2` *and* leaves a SHARDS pile at that cell, which is then a
+  normal pickup-and-deliver target worth `+1` like any other shard. So smashing an
+  urn is net `-1` even after cleanup, and breaking a doorway only pays off when one
+  broken cell is reused for several deliveries (the pay-once mechanic). The oracle
+  (`solver.py`) models this exactly: each urn is a 3-state cell
+  (intact → shard-pile → cleared), so the per-level DP state is
+  `robot × holding × 2^(#shards) × 3^(#urns)`. **Revisit if walls get large:** the
+  `3^(#urns)` factor is the only thing that scales badly (fine on 4×4 with few
+  urns; an ACCEL wall of many urns blows it up — cap urn count, chunk, or drop the
+  cleanup credit back to `2^(#urns)` if it ever bites).
+- Obs: bool grid `[B, ws, ws, 4]` (robot/bin/shards/urns) + inventory vec `[B, 1]`
+  (bool: holding shards?).
 - Rewards are external `RewardFunction(state, action, next_state) -> float[B]`,
   never baked into `step` — fully pluggable.
 

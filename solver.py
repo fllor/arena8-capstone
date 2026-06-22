@@ -389,9 +389,9 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     g = torch.Generator().manual_seed(0)
 
-    print("random fixed-bin layouts (4x4, shard_mean=2.0, urn_mean=1.3):")
+    print("random fixed-bin layouts (4x4, shard_mean=1.7, urn_mean=1.3):")
     envs = generate(
-        world_size=4, shard_mean=2.0, urn_mean=1.3, num_envs=64, generator=g
+        world_size=4, shard_mean=1.7, urn_mean=1.3, num_envs=64, generator=g
     )
     opt = compute_optimal_return(envs)
     print(f"  optimal return: mean {opt.mean():+.3f}  min {opt.min():+.3f}  max {opt.max():+.3f}")

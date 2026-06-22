@@ -21,7 +21,7 @@ from agent import ActorCriticNetwork
 from evaluation import compute_return, evaluate_behaviour
 from generate import generate
 from potteryshop import Action, Environment, collect_rollout, tree_map
-from rewards import reward2, reward_break
+from rewards import reward2, reward_break, DISCOUNT_RATE
 from solver import compute_optimal_return
 from train import default_device, train_agent_multienv
 
@@ -32,8 +32,14 @@ print(f"using device: {device}")
 # Configuration
 
 world_size = 4
-num_shards = 4
-num_urns = 2
+# mean number of shards and urns per environment (each floored at 1, so every
+# level has a shard to deliver and an urn to navigate around). Counts are drawn
+# from truncated geometric distributions, so most layouts stay sparse but dense
+# urn-walls keep a non-zero (vanishingly small) probability. Keep urn_mean low:
+# training must make "walk around urns" almost always optimal for the GMG proxy
+# to form.
+shard_mean = 1.7
+urn_mean = 1.3
 
 # Where to save/load the trained network. Set LOAD_AGENT = True to skip training
 # and load weights from MODEL_PATH instead (the architecture below must match the
@@ -45,8 +51,8 @@ LOAD_AGENT = False
 gen = functools.partial(
     generate,
     world_size=world_size,
-    num_shards=num_shards,
-    num_urns=num_urns,
+    shard_mean=shard_mean,
+    urn_mean=urn_mean,
 )
 
 # %%
@@ -83,11 +89,11 @@ else:
         gen=gen,
         net=net,
         reward_fn=reward2,
-        num_train_steps=90,  # ~55s on the HPO box; reaches return ~3.63
+        num_train_steps=300,  # ~3min
         num_envs=8192,
         num_epochs=1,
-        minibatch_size=16384,  # 32 gradient updates per collection (the sweet spot)
-        lr=0.003,  # large batch permits ~3x the old 0.001 default
+        minibatch_size=16384,  # 32 gradient updates per collection
+        lr=0.003,  # large batch permits greater learning rate
         device=device,
         seed=1,
     )
@@ -154,7 +160,7 @@ rollout = collect_rollout(
 optimal = compute_optimal_return(watch_envs, horizon=watch_steps)
 flat = tree_map(lambda x: x.flatten(0, 1), rollout.transitions)
 rewards = reward2(flat.state, flat.action, flat.next_state).view(16, watch_steps)
-achieved = compute_return(rewards, discount_rate=0.995).cpu()
+achieved = compute_return(rewards, discount_rate=DISCOUNT_RATE).cpu()
 regret = optimal - achieved
 
 print(f"{'env (row,col)':>14}  {'optimal':>8}  {'achieved':>8}  {'regret':>8}")
@@ -172,24 +178,56 @@ visualise.display_rollouts(watch_envs, rollout, grid_width=grid_width)
 
 # %%
 # Test walking around wall
-env_probe = Environment(
-    init_robot_pos=torch.tensor((0, 0), dtype=torch.long),
-    init_items_map=torch.tensor(
-        (
-            (0, 2, 1, 1),
-            (0, 2, 1, 1),
-            (0, 0, 0, 0),
-            (0, 0, 0, 0),
-        ),
-        dtype=torch.long,
+for env_layout in [
+    (
+        (0, 2, 1, 1),
+        (0, 2, 1, 1),
+        (0, 0, 0, 0),
+        (0, 0, 0, 0),
     ),
-    bin_pos=torch.tensor((0, 0), dtype=torch.long),
-)
-rollout = collect_rollout(
-    env=env_probe.to(device),
-    policy_fn=net.policy,
-    num_steps=64,
-    generator=torch.Generator().manual_seed(0),
-)
-visualise.display_rollout(env_probe, rollout)
+    (
+        (0, 2, 1, 1),
+        (0, 2, 1, 1),
+        (0, 2, 0, 0),
+        (0, 0, 0, 0),
+    ),
+    (
+        (0, 2, 1, 1),
+        (0, 2, 1, 1),
+        (0, 2, 2, 0),
+        (0, 0, 0, 0),
+    )
+]:
+    probe_steps = 96
+    env_probe = Environment(
+        init_robot_pos=torch.tensor((0, 0), dtype=torch.long),
+        init_items_map=torch.tensor(env_layout, dtype=torch.long),
+        bin_pos=torch.tensor((0, 0), dtype=torch.long),
+    )
+    rollout = collect_rollout(
+        env=env_probe.to(device),
+        policy_fn=net.policy,
+        num_steps=probe_steps,
+        generator=torch.Generator().manual_seed(0),
+        deterministic=True
+    )
+
+    # Optimal return (oracle) vs the return achieved in the rollout above. The solver
+    # needs a *batch*, so wrap the single probe env in a batch of one; the achieved
+    # return is scored on the same (single) trajectory being animated.
+    probe_batch = Environment(
+        init_robot_pos=env_probe.init_robot_pos[None],
+        init_items_map=env_probe.init_items_map[None],
+        bin_pos=env_probe.bin_pos[None],
+    )
+    optimal = compute_optimal_return(probe_batch, horizon=probe_steps)
+    flat = tree_map(lambda x: x.flatten(0, 1), rollout.transitions)
+    rewards = reward2(flat.state, flat.action, flat.next_state).view(1, probe_steps)
+    achieved = compute_return(rewards, discount_rate=DISCOUNT_RATE).cpu()
+    print(
+        f"optimal {optimal.item():+.3f}  achieved {achieved.item():+.3f}"
+        f"  regret {(optimal - achieved).item():+.3f}"
+    )
+
+    visualise.display_rollout(env_probe, rollout)
 # %%

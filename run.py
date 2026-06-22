@@ -101,57 +101,39 @@ else:
     print(f"saved agent to {MODEL_PATH}")
 
 # %%
-# Plot the training return (skipped when an agent was loaded from file)
+# Plot the training return, loss, and regret (skipped when an agent was loaded)
 
 if history is not None:
-    returns = [m["return"] for m in history]
-    fig, ax = plt.subplots(figsize=(7, 3))
-    ax.plot(returns, lw=0.8)
-    ax.set_xlabel("train step")
-    ax.set_ylabel("mean discounted return")
-    ax.set_title("training return")
+    # metrics are logged every `regret_every`-th step, so history is sparse;
+    # each entry records its true `step` index to plot against.
+    xs = [m["step"] for m in history]
+    series = [
+        ([m["return"] for m in history], "mean discounted return"),
+        ([m["loss"] for m in history], "PPO loss"),
+        ([m["regret"] for m in history], "mean oracle regret"),
+    ]
+    fig, axes = plt.subplots(3, 1, figsize=(7, 7), sharex=True)
+    for ax, (ys, ylabel) in zip(axes, series):
+        ax.plot(xs, ys, lw=0.8)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, lw=0.4, alpha=0.5)
+    axes[-1].set_xlabel("train step")
     fig.tight_layout()
     plt.show()
 
 # %%
-# Evaluate behaviour on a fresh batch of layouts from the same distribution.
-# `reward2` measures task success; `reward_break` probes urn-smashing.
+# Visualise grid of rollouts
 
-num_eval = 1000
-eval_envs = gen(num_envs=num_eval, generator=torch.Generator().manual_seed(0))
-
-probes = {"reward2": reward2, "reward_break": reward_break}
-fig, axes = plt.subplots(len(probes), figsize=(5, 3 * len(probes)))
-for (name, reward_fn), ax in zip(probes.items(), axes):
-    scores = evaluate_behaviour(
-        env=eval_envs,
-        net=net,
-        reward_fn=reward_fn,
-        num_rollouts=num_eval,
-        generator=torch.Generator().manual_seed(0),
-    )
-    print(f"{name:>12}: mean return {scores.mean().item():+.3f}")
-    ax.hist(scores.cpu().numpy(), bins=40)
-    ax.set_title(name)
-    ax.set_xlabel("return")
-fig.tight_layout()
-plt.show()
-
-# %%
-# Watch the trained agent act — the qualitative check the histograms can't give
-# you (does it walk around urns, or break through them?). Animates a grid of
-# rollouts; needs a notebook frontend.
-
-watch_envs = gen(num_envs=16, generator=torch.Generator().manual_seed(3))
-watch_steps = 64
-grid_width = 4
+watch_steps = 96
+grid_width = 6
+watch_envs = gen(num_envs=grid_width**2, generator=torch.Generator().manual_seed(3))
 rollout = collect_rollout(
     env=watch_envs,
     policy_fn=net.policy,
     num_steps=watch_steps,
     generator=torch.Generator().manual_seed(3),
     device=device,
-    deterministic=True
+    deterministic=False
 )
 
 # Optimal return (oracle) vs the return actually achieved in the rollout above.
@@ -159,12 +141,12 @@ rollout = collect_rollout(
 # numbers match what you see; the gap is the per-level regret.
 optimal = compute_optimal_return(watch_envs, horizon=watch_steps)
 flat = tree_map(lambda x: x.flatten(0, 1), rollout.transitions)
-rewards = reward2(flat.state, flat.action, flat.next_state).view(16, watch_steps)
+rewards = reward2(flat.state, flat.action, flat.next_state).view(grid_width**2, watch_steps)
 achieved = compute_return(rewards, discount_rate=DISCOUNT_RATE).cpu()
 regret = optimal - achieved
 
 print(f"{'env (row,col)':>14}  {'optimal':>8}  {'achieved':>8}  {'regret':>8}")
-for b in range(16):
+for b in range(grid_width**2):
     print(
         f"{f'{b:>2} ({b // grid_width},{b % grid_width})':>14}"
         f"  {optimal[b].item():>+8.3f}  {achieved[b].item():>+8.3f}  {regret[b].item():>+8.3f}"
@@ -209,12 +191,9 @@ for env_layout in [
         policy_fn=net.policy,
         num_steps=probe_steps,
         generator=torch.Generator().manual_seed(0),
-        deterministic=True
+        deterministic=False
     )
 
-    # Optimal return (oracle) vs the return achieved in the rollout above. The solver
-    # needs a *batch*, so wrap the single probe env in a batch of one; the achieved
-    # return is scored on the same (single) trajectory being animated.
     probe_batch = Environment(
         init_robot_pos=env_probe.init_robot_pos[None],
         init_items_map=env_probe.init_items_map[None],

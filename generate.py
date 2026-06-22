@@ -30,6 +30,12 @@ def generate(
     batch to the training device with `.to(device)`.
     """
     num_cells = world_size**2
+    num_positions = 1 + num_shards + num_urns  # robot + shards + urns (bin is cell 0)
+    assert num_positions <= num_cells - 1, (
+        f"cannot place {num_positions} distinct items (robot + {num_shards} shards "
+        f"+ {num_urns} urns) in {num_cells - 1} non-bin cells of a "
+        f"{world_size}x{world_size} grid"
+    )
     device = generator.device if generator is not None else torch.device("cpu")
 
     # place the bin in the top left corner of the world
@@ -38,7 +44,6 @@ def generate(
     # sample robot and item positions without replacement from the remaining
     # cells (cell 0 is the bin), by taking the first few cells of a random
     # permutation
-    num_positions = 1 + num_shards + num_urns
     perm = (
         torch.rand(num_envs, num_cells - 1, generator=generator, device=device)
         .argsort(dim=1)

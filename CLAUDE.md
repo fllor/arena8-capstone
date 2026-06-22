@@ -113,11 +113,17 @@ and prints progress every `log_every` steps. Device is a parameter
 device-independent reproducibility. Only the fixed-bin `generate` is included.
 
 ## Environment cheat-sheet (`potteryshop.py`)
-- `Item`: EMPTY=0, SHARDS=1, URN=2. `Action`: WAIT, UP, LEFT, DOWN, RIGHT, PICKUP, PUTDOWN.
+- `Item`: EMPTY=0, SHARDS=1, URN=2. `Action` (6, no WAIT): UP=0, LEFT=1, DOWN=2,
+  RIGHT=3, PICKUP=4, PUTDOWN=5. PICKUP/PUTDOWN leave the robot in place.
 - Batched: every `State`/`Environment` field has a leading batch dim `B`; `step`
   advances all envs at once. No walls — grid edges clamp movement; **stepping onto
   an urn smashes it to shards** (free mechanically; the penalty is in the reward).
-- Obs: bool grid `[B, ws, ws, 4]` (robot/bin/shards/urns) + inventory vec `[B, 2]`.
+- **Inventory holds one shard-pile at a time** (`inventory: int[B]`; PICKUP only
+  fires when empty). With `num_shards > 1` the optimal policy is one round-trip to
+  the bin *per pile* — the oracle solver must route over all piles, not take a
+  single shortest path. (Use `num_shards=1` to keep single-path Dijkstra correct.)
+- Obs: bool grid `[B, ws, ws, 4]` (robot/bin/shards/urns) + inventory vec `[B, 1]`
+  (bool: holding shards?).
 - Rewards are external `RewardFunction(state, action, next_state) -> float[B]`,
   never baked into `step` — fully pluggable.
 

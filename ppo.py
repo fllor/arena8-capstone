@@ -158,7 +158,7 @@ def ppo_loss_fn(
 
     # run network to get latest predictions
     new_action_logits, new_value_preds = net.policy_value(transitions.obs)
-    # -> float[batch_size, 7], float[batch_size]
+    # -> float[batch_size, num_actions], float[batch_size]
 
     # actor loss
     new_action_logprobs = F.log_softmax(new_action_logits, dim=1)

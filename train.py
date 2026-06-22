@@ -98,6 +98,8 @@ def train_agent_multienv(
     progress: bool = True,
     regret_frac: float = 0.1,
     regret_every: int = 10,
+    wandb_project: str | None = None,
+    wandb_run_name: str | None = None,
 ) -> tuple[ActorCriticNetwork, list[dict[str, float]]]:
     """
     Train `net` in place, resampling `num_envs` random layouts from `gen` every
@@ -118,6 +120,10 @@ def train_agent_multienv(
     the regret -- the oracle optimum and the policy's achieved return -- are
     averaged over exactly this same `envs[:regret_num_envs]` slice, so they pair
     per level and the mean regret stays non-negative.
+
+    If `wandb_project` is given, the scored-step metrics are also logged to
+    Weights & Biases under that project (optional dependency, imported lazily;
+    `wandb_run_name` names the run). Logging is off by default.
     """
     device = torch.device(device) if device is not None else default_device()
     net = net.to(device)
@@ -145,6 +151,30 @@ def train_agent_multienv(
     overlap = device.type == "cuda"
     regret_stream = torch.cuda.Stream() if overlap else None
     regret_pool = ThreadPoolExecutor(max_workers=1) if overlap else None
+
+    # optional Weights & Biases logging (lazy import: only required if enabled)
+    wandb_run = None
+    if wandb_project is not None:
+        import wandb
+
+        wandb_run = wandb.init(
+            project=wandb_project,
+            name=wandb_run_name,
+            config={
+                "num_train_steps": num_train_steps,
+                "num_envs": num_envs,
+                "num_env_steps": num_env_steps,
+                "num_epochs": num_epochs,
+                "minibatch_size": minibatch_size,
+                "discount_rate": discount_rate,
+                "entropy_coeff": entropy_coeff,
+                "lr": lr,
+                "seed": seed,
+                "regret_frac": regret_frac,
+                "regret_every": regret_every,
+                "device": str(device),
+            },
+        )
 
     def _solve_async(envs_slice, ready_event):
         with torch.cuda.stream(regret_stream):
@@ -201,6 +231,8 @@ def train_agent_multienv(
             metrics["regret"] = optimal_mean - achieved_mean
             metrics["step"] = step  # history is sparse; record the true step index
             history.append(metrics)
+            if wandb_run is not None:
+                wandb_run.log(metrics, step=step)
             if progress:
                 steps.set_postfix(
                     {
@@ -212,5 +244,7 @@ def train_agent_multienv(
     finally:
         if regret_pool is not None:
             regret_pool.shutdown()
+        if wandb_run is not None:
+            wandb_run.finish()
 
     return net, history

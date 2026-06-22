@@ -52,6 +52,10 @@ elif world_size == 5:
 MODEL_PATH = "agent.pt"
 LOAD_AGENT = False
 
+# Optional Weights & Biases logging. Set WANDB_PROJECT to a project name to log
+# the scored-step metrics (return/loss/regret) there; leave it None to disable.
+WANDB_PROJECT = "arena8-capstone"
+
 # the fixed-bin layout distribution, ready to pass to `train_agent_multienv`
 gen = functools.partial(
     generate,
@@ -101,6 +105,7 @@ else:
         lr=0.003,  # large batch permits greater learning rate
         device=device,
         seed=1,
+        wandb_project=WANDB_PROJECT,
     )
     torch.save(net.state_dict(), MODEL_PATH)
     print(f"saved agent to {MODEL_PATH}")

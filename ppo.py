@@ -44,7 +44,7 @@ def ppo_train_step_multienv(
     num_epochs: int = 4,
     minibatch_size: int = 4096,
     generator: torch.Generator | None = None,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], torch.Tensor]:
     """
     One PPO training step across a batch of environments: collect one rollout
     in each environment, then update `net` in place with `num_epochs` passes of
@@ -52,8 +52,12 @@ def ppo_train_step_multienv(
     `N = num_envs * num_env_steps` transitions and splits them into minibatches
     of `minibatch_size` (so the number of gradient updates grows with the
     batch -- a fixed minibatch *count* would instead give ever-larger, ever-
-    fewer updates as `num_envs` grows, and the policy barely moves). Returns
-    training metrics (losses/diagnostics averaged over all minibatch updates).
+    fewer updates as `num_envs` grows, and the policy barely moves).
+
+    Returns `(metrics, returns_per_env)`: the training metrics
+    (losses/diagnostics averaged over all minibatch updates) and the discounted
+    return achieved in each environment's rollout, a `[num_envs]` tensor in the
+    same order as `envs` (so it can be paired per-level with an oracle optimum).
     """
     assert envs.num_envs is not None, (
         "got a single environment; add a batch dimension to the environment "
@@ -131,13 +135,16 @@ def ppo_train_step_multienv(
             num_updates += 1
 
     # metrics (losses/diagnostics averaged over all minibatch updates; return
-    # is measured once on the freshly collected experience)
+    # is measured once on the freshly collected experience). The per-env return
+    # is returned alongside so callers can pair it with a per-level oracle
+    # optimum (e.g. for regret) on the same rollout.
+    returns_per_env = compute_return(rewards, discount_rate)
     train_metrics = {
         "loss": loss_sum / num_updates,
-        "return": compute_return(rewards, discount_rate).mean().item(),
+        "return": returns_per_env.mean().item(),
         **{k: v / num_updates for k, v in aux_sum.items()},
     }
-    return train_metrics
+    return train_metrics, returns_per_env
 
 
 # # #

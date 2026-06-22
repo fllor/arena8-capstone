@@ -37,8 +37,10 @@ def train_agent_multienv(
     net: ActorCriticNetwork,
     reward_fn: RewardFunction,
     num_train_steps: int = 4096,
-    num_envs: int = 32,
+    num_envs: int = 256,
     num_env_steps: int = 64,
+    num_epochs: int = 4,
+    minibatch_size: int = 4096,
     discount_rate: float = DISCOUNT_RATE,
     entropy_coeff: float = 0.01,  # needs more exploration than single-env
     lr: float = 0.001,
@@ -59,9 +61,16 @@ def train_agent_multienv(
     device = torch.device(device) if device is not None else default_device()
     net = net.to(device)
 
-    # sampling generator stays on CPU so layout/action draws are reproducible
-    # regardless of the training device
-    generator = torch.Generator().manual_seed(seed)
+    # Put the sampling generator on the training device when that device is
+    # CUDA. This lets `_sample_actions` (and layout generation in `gen`) run
+    # `multinomial`/`rand` directly on-GPU, eliminating the GPU<->CPU round
+    # trip that otherwise happens on *every* rollout timestep and serialises
+    # the GPU. Draws are still reproducible for a fixed (seed, device), but no
+    # longer bit-identical across devices. CPU/MPS keep a CPU generator (MPS
+    # has patchy generator support); for those, `_sample_actions` falls back to
+    # its cross-device sampling path.
+    gen_device = device if device.type == "cuda" else torch.device("cpu")
+    generator = torch.Generator(device=gen_device).manual_seed(seed)
     optimiser = torch.optim.Adam(net.parameters(), lr=lr)
 
     history: list[dict[str, float]] = []
@@ -74,6 +83,8 @@ def train_agent_multienv(
             reward_fn=reward_fn,
             optimiser=optimiser,
             num_env_steps=num_env_steps,
+            num_epochs=num_epochs,
+            minibatch_size=minibatch_size,
             discount_rate=discount_rate,
             eligibility_rate=0.95,
             proximity_eps=0.1,

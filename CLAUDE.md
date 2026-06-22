@@ -89,7 +89,9 @@ flat (`from potteryshop import ...`); **run scripts from this directory**.
 | `rewards.py` | `reward2` (intended reward) + chain, `DISCOUNT_RATE`. |
 | `generate.py` | `generate()` — FIXED-bin random layout distribution. |
 | `train.py` | `train_agent_multienv()`, `default_device()` — reusable library, no driver code. |
-| `run.py` | Interactive `# %%` driver: build → train → plot → evaluate. Imports from the rest. |
+| `visualise.py` | Notebook display helpers: `display_envs`, `display_rollout(s)`, `InteractivePlayer`. Built on `Environment.render`. Needs a notebook frontend (VS Code interactive / Jupyter). |
+| `run.py` | Interactive `# %%` driver: build → show layouts → train → plot → evaluate → watch rollout. Imports from the rest. |
+| `sprites.png` | Sprite sheet used by `Environment.render`. |
 
 Smoke-tested on CUDA: trains across 32 parallel envs, return climbs.
 
@@ -100,9 +102,13 @@ adversarial generator with the same signature** — that is the entire insertion
 point for PLR and ACCEL. No changes to PPO needed.
 
 ### Notes on the extraction
-Rendering/sprites were removed (no PIL/einops/sprite assets). Training is
-headless: `train_agent_multienv` returns `(net, history)` (list of per-step
-metric dicts) and prints progress every `log_every` steps. Device is a parameter
+Sprite rendering (`Environment.render` + `visualise.py`) is included for
+qualitative inspection — eyeballing whether the agent walks around urns or
+breaks through them, which the reward histograms can't show. It pulls in
+PIL/einops/ipywidgets and needs `sprites.png` + a notebook frontend; the
+training/eval path itself does not depend on it. Training is headless:
+`train_agent_multienv` returns `(net, history)` (list of per-step metric dicts)
+and prints progress every `log_every` steps. Device is a parameter
 (`default_device()`: cuda→mps→cpu). The sampling `Generator` stays on CPU for
 device-independent reproducibility. Only the fixed-bin `generate` is included.
 

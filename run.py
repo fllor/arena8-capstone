@@ -16,10 +16,11 @@ import functools
 import matplotlib.pyplot as plt
 import torch
 
+import visualise
 from agent import ActorCriticNetwork
 from evaluation import evaluate_behaviour
 from generate import generate
-from potteryshop import Action
+from potteryshop import Action, collect_rollout
 from rewards import reward2, reward_break
 from train import default_device, train_agent_multienv
 
@@ -40,6 +41,13 @@ gen = functools.partial(
     num_shards=num_shards,
     num_urns=num_urns,
 )
+
+# %%
+# Visualise a few sample layouts from the distribution (needs a notebook
+# frontend: VS Code interactive / Jupyter)
+
+sample_envs = gen(num_envs=16, generator=torch.Generator().manual_seed(0))
+visualise.display_envs(sample_envs, grid_width=4, title="fixed-bin training layouts")
 
 # %%
 # Build the agent
@@ -106,5 +114,20 @@ for (name, reward_fn), ax in zip(probes.items(), axes):
     ax.set_xlabel("return")
 fig.tight_layout()
 plt.show()
+
+# %%
+# Watch the trained agent act — the qualitative check the histograms can't give
+# you (does it walk around urns, or break through them?). Animates a grid of
+# rollouts; needs a notebook frontend.
+
+watch_envs = gen(num_envs=16, generator=torch.Generator().manual_seed(3))
+rollout = collect_rollout(
+    env=watch_envs,
+    policy_fn=net.policy,
+    num_steps=64,
+    generator=torch.Generator().manual_seed(3),
+    device=device,
+)
+visualise.display_rollouts(watch_envs, rollout, grid_width=4)
 
 # %%

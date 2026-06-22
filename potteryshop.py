@@ -1,11 +1,12 @@
 """
 The "pottery shop" grid-world environment, in batched PyTorch.
 
-This is a trimmed, self-contained extraction of the original exercise
-environment (a PyTorch port of Matthew Farrugia-Roberts' JAX original,
-https://github.com/matomatical/reward-lab). The rendering/sprite code has been
-removed; only what is needed to *train* across many environments at once is
-kept: the env dynamics, observations, and (annotated) rollout collection.
+This is a self-contained extraction of the original exercise environment (a
+PyTorch port of Matthew Farrugia-Roberts' JAX original,
+https://github.com/matomatical/reward-lab). It keeps what is needed to *train*
+across many environments at once -- env dynamics, observations, and (annotated)
+rollout collection -- plus sprite-based `render()` for qualitative inspection
+(see `visualise.py` for the notebook display helpers built on top of it).
 
 All `State` fields carry a leading batch dimension `B` (the number of parallel
 environments); `Environment.step` advances all `B` environments at once with
@@ -17,10 +18,14 @@ from __future__ import annotations
 import dataclasses
 import enum
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
+import einops
+import numpy as np
 import torch
 from jaxtyping import Bool, Float, Int
+from PIL import Image
 from torch import Tensor
 
 
@@ -264,6 +269,61 @@ class Environment:
         vec = (state.inventory == Item.SHARDS).unsqueeze(-1)
         return Observation(grid=grid, vec=vec)
 
+    def render(self, state: State, index: int = 0) -> np.ndarray:
+        """
+        Render environment `index` of a batched state as an RGB image
+        (a uint8 numpy array of shape (height, width, 3)).
+        """
+        items_map = state.items_map[index].cpu().numpy()
+        robot_pos = tuple(state.robot_pos[index].cpu().numpy())
+        bin_pos = tuple(state.bin_pos[index].cpu().numpy())
+        inventory = int(state.inventory[index])
+        ws = self.world_size
+
+        # choose avatar
+        robot_sprite = (
+            Sprites.ROBOT,
+            Sprites.ROBOT_SHARDS,
+            Sprites.ROBOT_URN,
+        )[inventory]
+
+        # select sprites for other tiles (16x8 'tall' sprites whose top
+        # halves overlap the tile above)
+        tall_sprites = np.zeros((ws, ws, 16, 8), dtype=np.uint8)
+        tall_sprites[0, :] = Sprites.FLOOR
+        tall_sprites[1:, :, 8:] = Sprites.FLOOR[8:]
+        tall_sprites = np.where(
+            (items_map == Item.SHARDS)[:, :, None, None],
+            np.where(Sprites.SHARDS > 0, Sprites.SHARDS, tall_sprites),
+            tall_sprites,
+        )
+        tall_sprites = np.where(
+            (items_map == Item.URN)[:, :, None, None],
+            np.where(Sprites.URN > 0, Sprites.URN, tall_sprites),
+            tall_sprites,
+        )
+        tall_sprites[bin_pos] = np.where(
+            Sprites.BIN > 0,
+            Sprites.BIN,
+            tall_sprites[bin_pos],
+        )
+        tall_sprites[robot_pos] = np.where(
+            robot_sprite > 0,
+            robot_sprite,
+            tall_sprites[robot_pos],
+        )
+
+        # pack the overlapping sprites together
+        bottoms = tall_sprites[:, :, 8:, :]
+        tops = tall_sprites[:, :, :8, :]
+        tiles = np.zeros((ws + 1, ws, 8, 8), dtype=np.uint8)
+        tiles[1:] = bottoms
+        tiles[:-1] = np.where(tops > 0, tops, tiles[:-1])
+
+        # form into 2d image and apply color palette
+        image = einops.rearrange(tiles, "H W h w -> (H h) (W w)")
+        return PALETTE[image]
+
 
 # # #
 # Simple rollouts
@@ -406,3 +466,33 @@ def collect_annotated_rollout(
         final_obs=final_obs,
         final_value_pred=final_value_pred,
     )
+
+
+# # #
+# Spritesheet (loaded once at import; used by `Environment.render`)
+
+_IMAGE = Image.open(Path(__file__).parent / "sprites.png")
+
+
+# palette
+_COLORS = {i: rgb for rgb, i in _IMAGE.palette.colors.items()}
+PALETTE = np.array([_COLORS[i] for i in range(len(_COLORS))], dtype=np.uint8)
+
+
+# sprites
+_SPRITESHEET = einops.rearrange(
+    np.array(_IMAGE),
+    "(H h) (W w) -> H W h w",
+    h=16,
+    w=8,
+)
+
+
+class Sprites:
+    FLOOR = _SPRITESHEET[0, 0]
+    BIN = _SPRITESHEET[0, 1]
+    SHARDS = _SPRITESHEET[0, 2]
+    URN = _SPRITESHEET[0, 3]
+    ROBOT = _SPRITESHEET[0, 4]
+    ROBOT_SHARDS = _SPRITESHEET[0, 5]
+    ROBOT_URN = _SPRITESHEET[0, 6]

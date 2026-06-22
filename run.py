@@ -121,8 +121,9 @@ if history is not None:
         ([m["return"] for m in history], "mean discounted return"),
         ([m["loss"] for m in history], "PPO loss"),
         ([m["regret"] for m in history], "mean oracle regret"),
+        ([m["entropy"] for m in history], "policy entropy"),
     ]
-    fig, axes = plt.subplots(3, 1, figsize=(7, 7), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(7, 9), sharex=True)
     for ax, (ys, ylabel) in zip(axes, series):
         ax.plot(xs, ys, lw=0.8)
         ax.set_ylabel(ylabel)

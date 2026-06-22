@@ -35,13 +35,12 @@ class Item(enum.IntEnum):
 
 
 class Action(enum.IntEnum):
-    WAIT = 0  # do nothing
-    UP = 1  # move up
-    LEFT = 2  # move left
-    DOWN = 3  # move down
-    RIGHT = 4  # move right
-    PICKUP = 5  # pick up item
-    PUTDOWN = 6  # drop held item
+    UP = 0  # move up
+    LEFT = 1  # move left
+    DOWN = 2  # move down
+    RIGHT = 3  # move right
+    PICKUP = 4  # pick up item
+    PUTDOWN = 5  # drop held item
 
 
 def tree_map(fn: Callable, tree, *rest):
@@ -86,7 +85,7 @@ class State:
 @dataclass(frozen=True)
 class Observation:
     grid: Bool[Tensor, "B world_size world_size 4"]  # world map
-    vec: Bool[Tensor, "B 2"]  # inventory
+    vec: Bool[Tensor, "B 1"]  # inventory (holding shards?)
 
     def to(self, device) -> Observation:
         return tree_map(lambda x: x.to(device), self)
@@ -188,7 +187,6 @@ class Environment:
         # move robot
         deltas = torch.tensor(
             (
-                (0, 0),  # (do nothing)
                 (-1, 0),  # move up
                 (0, -1),  # move left
                 (+1, 0),  # move down
@@ -262,14 +260,8 @@ class Environment:
         grid[batch, state.bin_pos[:, 0], state.bin_pos[:, 1], 1] = True
         grid[:, :, :, 2] = state.items_map == Item.SHARDS
         grid[:, :, :, 3] = state.items_map == Item.URN
-        # feature data (inventory status)
-        vec = torch.stack(
-            (
-                state.inventory == Item.SHARDS,
-                state.inventory == Item.URN,
-            ),
-            dim=-1,
-        )
+        # feature data (inventory status: holding shards?)
+        vec = (state.inventory == Item.SHARDS).unsqueeze(-1)
         return Observation(grid=grid, vec=vec)
 
 

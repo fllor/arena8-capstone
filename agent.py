@@ -38,9 +38,9 @@ class ActorCriticNetwork(nn.Module):
             for _ in range(num_conv_layers - 1)
         )
         # dense layers (first projects the flattened grid embedding plus the
-        # 2 inventory features down to net_width; the rest are residual)
+        # 1 inventory feature down to net_width; the rest are residual)
         self.dense0 = nn.Linear(
-            obs_height * obs_width * net_channels + 2,
+            obs_height * obs_width * net_channels + 1,
             net_width,
         )
         self.denses = nn.ModuleList(

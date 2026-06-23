@@ -65,6 +65,14 @@ from rewards import DISCOUNT_RATE
 _DELTAS = [(-1, 0), (0, -1), (+1, 0), (0, +1), (0, 0), (0, 0)]
 _MOVE_ACTIONS = (Action.UP, Action.LEFT, Action.DOWN, Action.RIGHT)
 
+# Above this many (level x compact-state) entries, `_build_transitions` builds the
+# four move actions with the memory-lean per-action loop instead of the vectorised
+# [B, N, 4] pass (see the comment there). Set to the default `compute_optimal_return`
+# state budget: at or below it the grouped solver keeps B*N <= budget, so the extra
+# [B, N, 4] temporaries are cheap; above it (a lone dense level, chunk=1) the loop
+# avoids a ~1.5x peak-memory blow-up that the vectorisation would not speed up.
+_VEC_MOVE_LIMIT = 1_000_000
+
 
 def _layout_tables(envs: Environment, device: torch.device):
     """
@@ -178,71 +186,83 @@ def _build_transitions(
     cur_is_bin = cur[None, :] == bin_cell[:, None]  # [B, N]
     urn_slot_cur = urn_slot[:, cur]  # [B, N]
     shard_slot_cur = shard_slot[:, cur]
+    # holding is unchanged by a move, so its shaping term is the same for all four
+    # move actions (and depends only on the pre-transition state).
+    shaping_hold = (discount * holding_b.float() - holding_b.float()) * shaping_coeff  # [B, N]
 
-    for a in range(6):
-        dr, dc = _DELTAS[a]
-        if a in _MOVE_ACTIONS:
+    # --- four move actions (UP, LEFT, DOWN, RIGHT) --------------------------------
+    # All four share identical dynamics, differing only in the destination cell. For
+    # the common (overhead-bound) batch we compute them in one vectorised pass with
+    # a trailing length-4 action axis -- the per-call Python/launch overhead of an
+    # action loop, not the FLOPs, dominates the solver at batch scale. But that pass
+    # materialises several [B, N, 4] temporaries; on a huge-N dense level (an ACCEL
+    # urn-wall, where `compute_optimal_return` is already forced to chunk=1) that
+    # ~1.5x's peak memory and can OOM. There the vectorisation buys nothing anyway
+    # (one big level is FLOP-bound, not launch-bound), so above `_VEC_MOVE_LIMIT`
+    # states we fall back to the memory-lean per-action loop ([B, N] working set).
+    if B * N <= _VEC_MOVE_LIMIT:
+        mdr = torch.tensor([_DELTAS[a][0] for a in _MOVE_ACTIONS], device=device)  # [4]
+        mdc = torch.tensor([_DELTAS[a][1] for a in _MOVE_ACTIONS], device=device)
+        dest = (torch.clamp(row[:, None] + mdr[None, :], 0, W - 1) * W
+                + torch.clamp(col[:, None] + mdc[None, :], 0, W - 1))  # [N, 4]
+        # smash on entry: stepping onto an intact urn -> shard-pile, pays -break.
+        urn_slot_dest = urn_slot[:, dest.reshape(-1)].reshape(B, N, 4)  # [B, N, 4]
+        valid_urn_dest = urn_slot_dest >= 0
+        upow_d = pow3[urn_slot_dest.clamp(min=0)]  # [B, N, 4]
+        trit_dest = (urncode_b[:, :, None] // upow_d) % 3
+        smash = valid_urn_dest & (trit_dest == 0)
+        new_urncode = urncode_b[:, :, None] + smash.long() * upow_d  # trit 0 -> 1, [B, N, 4]
+        wall_bump = (dest == cur[:, None]).float()  # [N, 4]: bumped a grid edge
+        rew_move = (-break_penalty * smash.float() + shaping_hold[:, :, None]
+                    - step_term[None, :, None] - waste_penalty * wall_bump[None])  # [B, N, 4]
+        nxt_move = (((dest[None] * 2 + holding_b[:, :, None]) * M_shard
+                     + shardmask_b[:, :, None]) * M_urn + new_urncode)  # [B, N, 4]
+        next_idx[:, :, list(_MOVE_ACTIONS)] = nxt_move
+        reward[:, :, list(_MOVE_ACTIONS)] = rew_move
+    else:
+        for a in _MOVE_ACTIONS:
+            dr, dc = _DELTAS[a]
             dest = (torch.clamp(row + dr, 0, W - 1) * W
                     + torch.clamp(col + dc, 0, W - 1))  # [N]
-        else:  # PICKUP / PUTDOWN leave the robot in place
-            dest = cur
+            urn_slot_dest = urn_slot[:, dest]  # [B, N]
+            valid_urn_dest = urn_slot_dest >= 0
+            upow_d = pow3[urn_slot_dest.clamp(min=0)]
+            smash = valid_urn_dest & ((urncode_b // upow_d) % 3 == 0)
+            new_urncode = urncode_b + smash.long() * upow_d  # trit 0 -> 1
+            wall_bump = (dest == cur).float()  # [N]: bumped a grid edge
+            rew = (-break_penalty * smash.float() + shaping_hold
+                   - step_term - waste_penalty * wall_bump)
+            next_idx[:, :, a] = (((dest[None, :] * 2 + holding_b) * M_shard
+                                  + shardmask_b) * M_urn + new_urncode)
+            reward[:, :, a] = rew
 
-        # --- smash on entry: stepping onto an intact urn -> shard-pile, pays -break ---
-        urn_slot_dest = urn_slot[:, dest]  # [B, N]
-        valid_urn_dest = urn_slot_dest >= 0
-        uslot_d = urn_slot_dest.clamp(min=0)
-        upow_d = pow3[uslot_d]
-        trit_dest = (urncode_b // upow_d) % 3
-        smash = valid_urn_dest & (trit_dest == 0)
-        urncode_after = urncode_b + smash.long() * upow_d  # trit 0 -> 1
-        reward_smash = -break_penalty * smash.float()
+    # --- PICKUP (robot stays put; no urn smashed on a non-move) -------------------
+    valid_shard = shard_slot_cur >= 0
+    sslot = shard_slot_cur.clamp(min=0)
+    shard_bit = torch.bitwise_right_shift(shardmask_b, sslot) & 1
+    shard_here = valid_shard & (shard_bit == 1)  # original shard pile present?
+    valid_urn = urn_slot_cur >= 0
+    upow = pow3[urn_slot_cur.clamp(min=0)]
+    urn_here = valid_urn & ((urncode_b // upow) % 3 == 1)  # trit 1 = smashed-urn pile
+    can_pickup = (holding_b == 0) & (shard_here | urn_here)
+    new_holding = torch.where(can_pickup, torch.ones_like(holding_b), holding_b)
+    pow2 = torch.bitwise_left_shift(torch.ones_like(sslot), sslot)
+    new_shardmask = shardmask_b - (can_pickup & shard_here).long() * pow2  # clear the bit
+    new_urncode = urncode_b + (can_pickup & urn_here).long() * upow  # trit 1 -> 2
+    shaping = (discount * new_holding.float() - holding_b.float()) * shaping_coeff
+    rew = shaping - step_term - waste_penalty * (~can_pickup).float()  # wasted if nothing picked
+    next_idx[:, :, Action.PICKUP] = (
+        ((robot[None, :] * 2 + new_holding) * M_shard + new_shardmask) * M_urn + new_urncode)
+    reward[:, :, Action.PICKUP] = rew
 
-        if a in _MOVE_ACTIONS:
-            new_robot = dest[None, :].expand(B, N)
-            new_holding = holding_b
-            new_shardmask = shardmask_b
-            new_urncode = urncode_after
-            shaping = (discount * new_holding.float() - holding_b.float()) * shaping_coeff
-            # wasted move: the robot bumped a grid edge (position unchanged).
-            wall_bump = (dest == cur).float()  # [N], broadcasts over [B, N]
-            rew = reward_smash + shaping - step_term - waste_penalty * wall_bump
-
-        elif a == Action.PICKUP:
-            new_robot = robot[None, :].expand(B, N)
-            # shard pile present at current cell? (original shard OR smashed urn)
-            valid_shard = shard_slot_cur >= 0
-            sslot = shard_slot_cur.clamp(min=0)
-            shard_bit = torch.bitwise_right_shift(shardmask_b, sslot) & 1
-            shard_here = valid_shard & (shard_bit == 1)
-            valid_urn = urn_slot_cur >= 0
-            uslot = urn_slot_cur.clamp(min=0)
-            upow = pow3[uslot]
-            urn_here = valid_urn & ((urncode_b // upow) % 3 == 1)  # trit 1 = shard-pile
-            can_pickup = (holding_b == 0) & (shard_here | urn_here)
-            new_holding = torch.where(can_pickup, torch.ones_like(holding_b), holding_b)
-            pick_shard = can_pickup & shard_here
-            pow2 = torch.bitwise_left_shift(torch.ones_like(sslot), sslot)
-            new_shardmask = shardmask_b - pick_shard.long() * pow2  # clear the set bit
-            pick_urn = can_pickup & urn_here
-            new_urncode = urncode_b + pick_urn.long() * upow  # trit 1 -> 2
-            shaping = (discount * new_holding.float() - holding_b.float()) * shaping_coeff
-            # wasted PICKUP: nothing was picked up (inventory unchanged).
-            rew = shaping - step_term - waste_penalty * (~can_pickup).float()
-
-        else:  # Action.PUTDOWN
-            new_robot = robot[None, :].expand(B, N)
-            deliver = (holding_b == 1) & cur_is_bin
-            new_holding = torch.where(deliver, torch.zeros_like(holding_b), holding_b)
-            new_shardmask = shardmask_b
-            new_urncode = urncode_b  # non-bin putdowns modelled as no-ops (never optimal)
-            shaping = (discount * new_holding.float() - holding_b.float()) * shaping_coeff
-            # wasted PUTDOWN: nothing was delivered (inventory unchanged). The
-            # optimal never floor-drops, so this matches reward_waste on-policy.
-            rew = bin_reward * deliver.float() + shaping - step_term - waste_penalty * (~deliver).float()
-
-        nxt = ((new_robot * 2 + new_holding) * M_shard + new_shardmask) * M_urn + new_urncode
-        next_idx[:, :, a] = nxt
-        reward[:, :, a] = rew
+    # --- PUTDOWN (deliver iff holding at the bin; floor-drops modelled as no-ops) -
+    deliver = (holding_b == 1) & cur_is_bin
+    new_holding = torch.where(deliver, torch.zeros_like(holding_b), holding_b)
+    shaping = (discount * new_holding.float() - holding_b.float()) * shaping_coeff
+    rew = bin_reward * deliver.float() + shaping - step_term - waste_penalty * (~deliver).float()
+    next_idx[:, :, Action.PUTDOWN] = (
+        ((robot[None, :] * 2 + new_holding) * M_shard + shardmask_b) * M_urn + urncode_b)
+    reward[:, :, Action.PUTDOWN] = rew
 
     return next_idx, reward, M_shard, M_urn, N
 

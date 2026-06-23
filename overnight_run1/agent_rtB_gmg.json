@@ -1,0 +1,44 @@
+{
+  "cfg": {
+    "name": "rtB-gmg-bp3-sc0.2",
+    "steps": 500,
+    "world_size": 4,
+    "shard_mean": 1.7,
+    "urn_mean": 1.3,
+    "num_envs": 8192,
+    "minibatch": 16384,
+    "num_epochs": 1,
+    "num_env_steps": 64,
+    "lr": 0.003,
+    "entropy_coeff": 0.01,
+    "seed": 1,
+    "reward_params": {
+      "break_penalty": 3.0,
+      "shaping_coeff": 0.5,
+      "step_cost": 0.2,
+      "waste_penalty": 0.0,
+      "bin_reward": 1.0
+    }
+  },
+  "wall_min": 5.42,
+  "final": {
+    "random": {
+      "mean_regret": 0.11664173007011414,
+      "max_regret": 10.568543434143066,
+      "frac_solved": 0.9484999775886536,
+      "break_rate": 0.04149999842047691,
+      "mean_optimal": -1.0124447345733643,
+      "mean_achieved": -1.1290862560272217,
+      "n": 2000
+    },
+    "walls": {
+      "mean_regret": 4.070499420166016,
+      "max_regret": 5.9536614418029785,
+      "frac_solved": 0.0,
+      "break_rate": 0.3333333432674408,
+      "mean_optimal": -5.023684024810791,
+      "mean_achieved": -9.094183921813965,
+      "n": 3
+    }
+  }
+}

@@ -50,15 +50,16 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
+import rewards
 from potteryshop import Action, Environment, Item
-from rewards import DISCOUNT_RATE, STEP_COST, WASTE_PENALTY
+from rewards import DISCOUNT_RATE
 
-# Constants mirroring `rewards.reward2` (keep in sync with rewards.py).
-_BIN_REWARD = 1.0       # reward_bin: +1 per delivery
-_BREAK_PENALTY = 3.0    # reward_no_break: -3 per urn smashed
-_SHAPING_COEFF = 0.5    # reward_shaped divides the pickup-shaping term by 2
-_STEP_COST = STEP_COST  # reward_step_cost: -STEP_COST per step while unfinished
-_WASTE_PENALTY = WASTE_PENALTY  # reward_waste: -WASTE_PENALTY per no-effect action
+# The solver mirrors `rewards.reward2` exactly. Rather than copy the tunable
+# reward parameters at import (which would silently go stale if a sweep changes
+# them), the public entry points read them from the `rewards` module at call
+# time -- see `compute_optimal_return`, whose `None` defaults resolve to the
+# current `rewards.*` globals. This keeps the oracle in lock-step with whatever
+# reward the training run is using.
 
 # (row, col) deltas per Action, matching potteryshop.step.
 _DELTAS = [(-1, 0), (0, -1), (+1, 0), (0, +1), (0, 0), (0, 0)]
@@ -127,6 +128,9 @@ def _build_transitions(
     discount: float,
     break_penalty: float,
     per_step_cost: float,
+    shaping_coeff: float,
+    waste_penalty: float,
+    bin_reward: float,
     device: torch.device,
 ):
     """
@@ -198,10 +202,10 @@ def _build_transitions(
             new_holding = holding_b
             new_shardmask = shardmask_b
             new_urncode = urncode_after
-            shaping = (discount * new_holding.float() - holding_b.float()) * _SHAPING_COEFF
+            shaping = (discount * new_holding.float() - holding_b.float()) * shaping_coeff
             # wasted move: the robot bumped a grid edge (position unchanged).
             wall_bump = (dest == cur).float()  # [N], broadcasts over [B, N]
-            rew = reward_smash + shaping - step_term - _WASTE_PENALTY * wall_bump
+            rew = reward_smash + shaping - step_term - waste_penalty * wall_bump
 
         elif a == Action.PICKUP:
             new_robot = robot[None, :].expand(B, N)
@@ -221,9 +225,9 @@ def _build_transitions(
             new_shardmask = shardmask_b - pick_shard.long() * pow2  # clear the set bit
             pick_urn = can_pickup & urn_here
             new_urncode = urncode_b + pick_urn.long() * upow  # trit 1 -> 2
-            shaping = (discount * new_holding.float() - holding_b.float()) * _SHAPING_COEFF
+            shaping = (discount * new_holding.float() - holding_b.float()) * shaping_coeff
             # wasted PICKUP: nothing was picked up (inventory unchanged).
-            rew = shaping - step_term - _WASTE_PENALTY * (~can_pickup).float()
+            rew = shaping - step_term - waste_penalty * (~can_pickup).float()
 
         else:  # Action.PUTDOWN
             new_robot = robot[None, :].expand(B, N)
@@ -231,10 +235,10 @@ def _build_transitions(
             new_holding = torch.where(deliver, torch.zeros_like(holding_b), holding_b)
             new_shardmask = shardmask_b
             new_urncode = urncode_b  # non-bin putdowns modelled as no-ops (never optimal)
-            shaping = (discount * new_holding.float() - holding_b.float()) * _SHAPING_COEFF
+            shaping = (discount * new_holding.float() - holding_b.float()) * shaping_coeff
             # wasted PUTDOWN: nothing was delivered (inventory unchanged). The
             # optimal never floor-drops, so this matches reward_waste on-policy.
-            rew = _BIN_REWARD * deliver.float() + shaping - step_term - _WASTE_PENALTY * (~deliver).float()
+            rew = bin_reward * deliver.float() + shaping - step_term - waste_penalty * (~deliver).float()
 
         nxt = ((new_robot * 2 + new_holding) * M_shard + new_shardmask) * M_urn + new_urncode
         next_idx[:, :, a] = nxt
@@ -248,8 +252,11 @@ def compute_optimal_return(
     envs: Environment,
     discount_rate: float = DISCOUNT_RATE,
     horizon: int = 64,
-    break_penalty: float = _BREAK_PENALTY,
-    per_step_cost: float = _STEP_COST,
+    break_penalty: float | None = None,
+    per_step_cost: float | None = None,
+    shaping_coeff: float | None = None,
+    waste_penalty: float | None = None,
+    bin_reward: float | None = None,
     device: torch.device | str | None = None,
     chunk_size: int = 512,
 ) -> Float[Tensor, "B"]:
@@ -257,10 +264,20 @@ def compute_optimal_return(
     Exact optimal discounted return for each layout in `envs`, over `horizon`
     steps with discount `discount_rate`, under the `reward2` reward.
 
+    The five reward knobs default to `None`, meaning "use the current
+    `rewards.*` globals" -- so the oracle automatically tracks any reward change
+    made via `rewards.set_reward_params(...)`. Pass an explicit value to override
+    one (e.g. `break_penalty=100` to probe the no-break optimum).
+
     Returns a CPU float tensor of shape [B] (one optimal return per level),
     matching the per-level layout of `evaluate_behaviour`'s policy returns so
     regret is just `compute_optimal_return(envs) - policy_returns`.
     """
+    break_penalty = rewards.BREAK_PENALTY if break_penalty is None else break_penalty
+    per_step_cost = rewards.STEP_COST if per_step_cost is None else per_step_cost
+    shaping_coeff = rewards.SHAPING_COEFF if shaping_coeff is None else shaping_coeff
+    waste_penalty = rewards.WASTE_PENALTY if waste_penalty is None else waste_penalty
+    bin_reward = rewards.BIN_REWARD if bin_reward is None else bin_reward
     if device is None:
         device = envs.device if envs.device.type == "cuda" else torch.device("cpu")
     device = torch.device(device)
@@ -278,7 +295,8 @@ def compute_optimal_return(
         sl = slice(lo, hi)
         next_idx, reward, M_shard, M_urn, N = _build_transitions(
             shard_slot[sl], urn_slot[sl], bin_cell[sl],
-            S, U, C, W, discount_rate, break_penalty, per_step_cost, device,
+            S, U, C, W, discount_rate, break_penalty, per_step_cost,
+            shaping_coeff, waste_penalty, bin_reward, device,
         )
         Bc = hi - lo
         # backward induction: V_t = max_a [ r + gamma * V_{t+1}(next) ]
@@ -290,6 +308,44 @@ def compute_optimal_return(
         start = (((robot_cell[sl] * 2 + 0) * M_shard + init_shardmask[sl]) * M_urn
                  + init_urncode[sl])  # holding=0 at start
         out[lo:hi] = V.gather(1, start[:, None]).squeeze(1).cpu()
+    return out
+
+
+# Peak DP state count (chunk * N) the grouped solver materialises at once. Mirrors
+# train._REGRET_STATE_BUDGET; ~1e6 keeps the footprint to a few hundred MB.
+_STATE_BUDGET = 1_000_000
+
+
+@torch.no_grad()
+def compute_optimal_return_grouped(
+    envs: Environment,
+    *,
+    state_budget: int = _STATE_BUDGET,
+    **kwargs,
+) -> Float[Tensor, "B"]:
+    """
+    Per-level optimal return that is safe on heterogeneous batches.
+
+    `compute_optimal_return` pads its compact DP state to the *batch-max* shard
+    and urn counts, so a single dense level inflates `N = C*2*2^S*3^U` -- and
+    thus memory -- for every level in its chunk; on a random batch with a
+    high-urn tail outlier this OOMs. Here we group levels by their exact
+    `(#shards, #urns)`: each group gets its own minimal `N` and a chunk size
+    derived from `state_budget`, so sparse groups solve in wide chunks while rare
+    dense groups fall back to small (down to one-level) chunks. Returns a CPU
+    `[B]` tensor in the original input order; results are exact (no subsampling).
+    """
+    items = envs.init_items_map.flatten(1)
+    n_shard = (items == Item.SHARDS).sum(1)
+    n_urn = (items == Item.URN).sum(1)
+    cells = envs.world_size ** 2
+    B = envs.num_envs
+    out = torch.empty(B, dtype=torch.float32)
+    for s, u in torch.unique(torch.stack([n_shard, n_urn], dim=1), dim=0).tolist():
+        idx = ((n_shard == s) & (n_urn == u)).nonzero(as_tuple=True)[0]
+        n_states = cells * 2 * (1 << s) * (3 ** u)
+        chunk = max(1, state_budget // max(1, n_states))
+        out[idx] = compute_optimal_return(envs[idx], chunk_size=chunk, **kwargs)
     return out
 
 
@@ -325,7 +381,9 @@ def _validate(envs: Environment, horizon: int = 64, discount: float = DISCOUNT_R
         _layout_tables(envs, device)
     )
     next_idx, reward, M_shard, M_urn, N = _build_transitions(
-        shard_slot, urn_slot, bin_cell, S, U, C, W, discount, _BREAK_PENALTY, _STEP_COST, device,
+        shard_slot, urn_slot, bin_cell, S, U, C, W, discount,
+        rewards.BREAK_PENALTY, rewards.STEP_COST, rewards.SHAPING_COEFF,
+        rewards.WASTE_PENALTY, rewards.BIN_REWARD, device,
     )
     # store every V_t so we can extract the greedy action at each step
     V_stack = [torch.zeros((B, N), dtype=torch.float32, device=device)]

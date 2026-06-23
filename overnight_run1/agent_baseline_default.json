@@ -1,0 +1,44 @@
+{
+  "cfg": {
+    "name": "baseline-default-500",
+    "steps": 500,
+    "world_size": 4,
+    "shard_mean": 1.7,
+    "urn_mean": 1.3,
+    "num_envs": 8192,
+    "minibatch": 16384,
+    "num_epochs": 1,
+    "num_env_steps": 64,
+    "lr": 0.003,
+    "entropy_coeff": 0.01,
+    "seed": 1,
+    "reward_params": {
+      "break_penalty": 3.0,
+      "shaping_coeff": 0.5,
+      "step_cost": 0.02,
+      "waste_penalty": 0.0,
+      "bin_reward": 1.0
+    }
+  },
+  "wall_min": 5.39,
+  "final": {
+    "random": {
+      "mean_regret": 0.044603798538446426,
+      "max_regret": 5.485955715179443,
+      "frac_solved": 0.9725000262260437,
+      "break_rate": 0.0010000000474974513,
+      "mean_optimal": 1.3582243919372559,
+      "mean_achieved": 1.3136205673217773,
+      "n": 2000
+    },
+    "walls": {
+      "mean_regret": 2.980543851852417,
+      "max_regret": 3.528801918029785,
+      "frac_solved": 0.0,
+      "break_rate": 0.0,
+      "mean_optimal": 1.8828092813491821,
+      "mean_achieved": -1.0977344512939453,
+      "n": 3
+    }
+  }
+}

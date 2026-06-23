@@ -22,6 +22,27 @@ from potteryshop import Action, Item, State
 # Discount rate, shared by training, GAE, and the shaping term below.
 DISCOUNT_RATE = 0.995
 
+# --- Tunable reward parameters --------------------------------------------------
+# All four reward knobs the project tunes live here as module globals so a single
+# source of truth drives BOTH the training reward (`reward2`, which reads them at
+# call time) AND the oracle solver (`solver.compute_optimal_return`, whose
+# defaults read these dynamically). Change them via `set_reward_params(...)` (or
+# assign directly) and training + oracle stay in sync automatically.
+#
+#   BREAK_PENALTY  -- urn-smash penalty (reward_no_break = -BREAK_PENALTY/smash).
+#                     Net cost of smashing an urn is BREAK_PENALTY - BIN_REWARD
+#                     after the resulting shard pile is cleaned up (default -2).
+#   SHAPING_COEFF  -- weight on the potential-based pickup-shaping term ("inventory
+#                     potential"): reward for holding a shard, telescoped so it
+#                     doesn't change the optimal policy, only return magnitudes.
+#   STEP_COST      -- per-step living cost while the task is unfinished (prices
+#                     detour length).
+#   WASTE_PENALTY  -- penalty for a no-effect action (edge bump / no-op interact).
+#   BIN_REWARD     -- delivery reward (+1 per shard binned).
+BREAK_PENALTY = 3.0
+SHAPING_COEFF = 0.5
+BIN_REWARD = 1.0
+
 # Per-step "living" cost, charged only while the task is unfinished (a shard is
 # still on the map or in inventory). Because episodes run a fixed number of
 # steps, a cost charged on *every* step would be a policy-independent constant
@@ -64,8 +85,8 @@ def reward_break(state: State, action: Int[Tensor, "B"], next_state: State) -> F
 
 
 def reward_no_break(state: State, action: Int[Tensor, "B"], next_state: State) -> Float[Tensor, "B"]:
-    """Penalty of -3 per urn smashed."""
-    return -3.0 * reward_break(state, action, next_state)
+    """Penalty of `-BREAK_PENALTY` per urn smashed."""
+    return -BREAK_PENALTY * reward_break(state, action, next_state)
 
 
 def inventory_potential(state: State) -> Float[Tensor, "B"]:
@@ -74,8 +95,8 @@ def inventory_potential(state: State) -> Float[Tensor, "B"]:
 
 
 def reward_bin(state: State, action: Int[Tensor, "B"], next_state: State) -> Float[Tensor, "B"]:
-    """+1 for a PUTDOWN of shards while standing on the bin."""
-    return (
+    """`+BIN_REWARD` for a PUTDOWN of shards while standing on the bin."""
+    return BIN_REWARD * (
         (state.bin_pos[:, 0] == state.robot_pos[:, 0])
         & (state.bin_pos[:, 1] == state.robot_pos[:, 1])
         & (state.inventory == Item.SHARDS)
@@ -87,7 +108,7 @@ def reward_shaped(state: State, action: Int[Tensor, "B"], next_state: State) -> 
     """Bin reward plus a (potential-based, discounted) pickup shaping term."""
     pickup_shaping_term = DISCOUNT_RATE * inventory_potential(next_state) - inventory_potential(state)
     bin_reward_term = reward_bin(state, action, next_state)
-    return bin_reward_term + pickup_shaping_term / 2
+    return bin_reward_term + SHAPING_COEFF * pickup_shaping_term
 
 
 def reward_step_cost(state: State, action: Int[Tensor, "B"], next_state: State) -> Float[Tensor, "B"]:
@@ -134,3 +155,38 @@ def reward2(state: State, action: Int[Tensor, "B"], next_state: State) -> Float[
     step = reward_step_cost(state, action, next_state)
     waste = reward_waste(state, action, next_state)
     return shaped + nobreak + step + waste
+
+
+def set_reward_params(
+    break_penalty: float | None = None,
+    shaping_coeff: float | None = None,
+    step_cost: float | None = None,
+    waste_penalty: float | None = None,
+    bin_reward: float | None = None,
+) -> dict[str, float]:
+    """
+    Override the tunable reward globals in place (only the ones passed). Because
+    `reward2` and the oracle solver both read these globals at call time, one
+    call here keeps the training reward and the regret oracle in sync. Returns
+    the full current parameter dict (handy for logging).
+    """
+    global BREAK_PENALTY, SHAPING_COEFF, STEP_COST, WASTE_PENALTY, BIN_REWARD
+    if break_penalty is not None:
+        BREAK_PENALTY = break_penalty
+    if shaping_coeff is not None:
+        SHAPING_COEFF = shaping_coeff
+    if step_cost is not None:
+        STEP_COST = step_cost
+    if waste_penalty is not None:
+        WASTE_PENALTY = waste_penalty
+    if bin_reward is not None:
+        BIN_REWARD = bin_reward
+    return reward_params()
+
+
+def reward_params() -> dict[str, float]:
+    """The current tunable reward parameters (for logging / reproducibility)."""
+    return dict(
+        break_penalty=BREAK_PENALTY, shaping_coeff=SHAPING_COEFF,
+        step_cost=STEP_COST, waste_penalty=WASTE_PENALTY, bin_reward=BIN_REWARD,
+    )

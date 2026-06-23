@@ -1,0 +1,58 @@
+CONFIG {"name": "rtA-5x5-bp0.5", "steps": 1500, "world_size": 5, "shard_mean": 2.0, "urn_mean": 1.7, "num_envs": 8192, "minibatch": 16384, "num_epochs": 1, "num_env_steps": 96, "lr": 0.003, "entropy_coeff": 0.01, "seed": 1, "reward_params": {"break_penalty": 0.5, "shaping_coeff": 0.5, "step_cost": 0.02, "waste_penalty": 0.0, "bin_reward": 1.0}}
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /root/.netrc.
+wandb: Currently logged in as: rambo-ramon-rainer (rambo-ramon-rainer-foo-research-inc-) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.27.0
+wandb: Run data is saved locally in /root/capstone-florian/wandb/run-20260623_025841-33r7octb
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run rtA-5x5-bp0.5
+wandb: ⭐️ View project at https://wandb.ai/rambo-ramon-rainer-foo-research-inc-/arena8-capstone
+wandb: 🚀 View run at https://wandb.ai/rambo-ramon-rainer-foo-research-inc-/arena8-capstone/runs/33r7octb
+EVAL step     0  rand_regret 3.5996  rand_solved 0.000  rand_max 7.96  walls_regret 6.632  walls_break 0.00
+EVAL step   250  rand_regret 0.2794  rand_solved 0.857  rand_max 6.99  walls_regret 7.127  walls_break 1.00
+EVAL step   500  rand_regret 0.0081  rand_solved 0.934  rand_max 0.17  walls_regret 7.129  walls_break 1.00
+EVAL step   750  rand_regret 0.0128  rand_solved 0.941  rand_max 2.60  walls_regret 6.969  walls_break 1.00
+EVAL step  1000  rand_regret 0.0091  rand_solved 0.947  rand_max 0.58  walls_regret 7.296  walls_break 1.00
+EVAL step  1250  rand_regret 0.0177  rand_solved 0.953  rand_max 6.14  walls_regret 7.125  walls_break 1.00
+wandb: updating run metadata
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading history steps 5-5, summary
+wandb: uploading data
+wandb: 
+wandb: Run history:
+wandb:    actor-clip ▁▄▁▇█▃
+wandb:     actor-kl1 ▁▅▄██▃
+wandb:     actor-kl3 ▁▅▃██▃
+wandb:   critic-clip █▁▁▁▁▁
+wandb:       entropy █▂▁▁▁▁
+wandb:          loss █▂▁▁▁▁
+wandb:    loss-actor ▁█▆▆▆▅
+wandb:   loss-critic █▁▁▁▁▁
+wandb:  random_break ▁█████
+wandb: random_regret █▂▁▁▁▁
+wandb:            +8 ...
+wandb: 
+wandb: Run summary:
+wandb:    actor-clip 0.07044
+wandb:     actor-kl1 0.00277
+wandb:     actor-kl3 0.0027
+wandb:   critic-clip 0.00053
+wandb:       entropy 1.09937
+wandb:          loss -0.01104
+wandb:    loss-actor -0.00021
+wandb:   loss-critic 0.00033
+wandb:  random_break 0.99609
+wandb: random_regret 0.01775
+wandb:            +8 ...
+wandb: 
+wandb: 🚀 View run rtA-5x5-bp0.5 at: https://wandb.ai/rambo-ramon-rainer-foo-research-inc-/arena8-capstone/runs/33r7octb
+wandb: ⭐️ View project at: https://wandb.ai/rambo-ramon-rainer-foo-research-inc-/arena8-capstone
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260623_025841-33r7octb/logs
+
+=== rtA-5x5-bp0.5  (wall 32.6 min, 1500 steps) ===
+reward params: {'break_penalty': 0.5, 'shaping_coeff': 0.5, 'step_cost': 0.02, 'waste_penalty': 0.0, 'bin_reward': 1.0}
+    random: regret +0.012 (max +5.028)  optimal +2.025  achieved +2.013  break-rate 1.00  solved 0.97  n=2000
+     walls: regret +7.127 (max +8.429)  optimal +5.104  achieved -2.023  break-rate 1.00  solved 0.00  n=3
+
+saved net -> agent_5x5_rtA.pt  config+metrics -> agent_5x5_rtA.json
+SUMMARY {"random": {"mean_regret": 0.012202147394418716, "max_regret": 5.028005123138428, "frac_solved": 0.9660000205039978, "break_rate": 0.9955000281333923, "mean_optimal": 2.0249898433685303, "mean_achieved": 2.0127875804901123, "n": 2000}, "walls": {"mean_regret": 7.127077102661133, "max_regret": 8.42884635925293, "frac_solved": 0.0, "break_rate": 1.0, "mean_optimal": 5.104220867156982, "mean_achieved": -2.0228559970855713, "n": 3}}

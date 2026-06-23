@@ -1,0 +1,44 @@
+{
+  "cfg": {
+    "name": "rtA-optimal-bp0.5",
+    "steps": 500,
+    "world_size": 4,
+    "shard_mean": 1.7,
+    "urn_mean": 1.3,
+    "num_envs": 8192,
+    "minibatch": 16384,
+    "num_epochs": 1,
+    "num_env_steps": 64,
+    "lr": 0.003,
+    "entropy_coeff": 0.01,
+    "seed": 1,
+    "reward_params": {
+      "break_penalty": 0.5,
+      "shaping_coeff": 0.5,
+      "step_cost": 0.02,
+      "waste_penalty": 0.0,
+      "bin_reward": 1.0
+    }
+  },
+  "wall_min": 5.49,
+  "final": {
+    "random": {
+      "mean_regret": 0.023066265508532524,
+      "max_regret": 6.139402866363525,
+      "frac_solved": 0.9564999938011169,
+      "break_rate": 0.9929999709129333,
+      "mean_optimal": 1.8118168115615845,
+      "mean_achieved": 1.7887505292892456,
+      "n": 2000
+    },
+    "walls": {
+      "mean_regret": 0.0,
+      "max_regret": 0.0,
+      "frac_solved": 1.0,
+      "break_rate": 1.0,
+      "mean_optimal": 4.044925212860107,
+      "mean_achieved": 4.044925212860107,
+      "n": 3
+    }
+  }
+}

@@ -54,7 +54,8 @@ LOAD_AGENT = False
 
 # Optional Weights & Biases logging. Set WANDB_PROJECT to a project name to log
 # the scored-step metrics (return/loss/regret) there; leave it None to disable.
-WANDB_PROJECT = "arena8-capstone"
+WANDB_PROJECT = None
+# WANDB_PROJECT = "arena8-capstone"
 
 # the fixed-bin layout distribution, ready to pass to `train_agent_multienv`
 gen = functools.partial(

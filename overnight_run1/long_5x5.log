@@ -1,0 +1,64 @@
+CONFIG {"name": "long-5x5-default", "steps": 3000, "world_size": 5, "shard_mean": 2.0, "urn_mean": 1.7, "num_envs": 8192, "minibatch": 16384, "num_epochs": 1, "num_env_steps": 96, "lr": 0.003, "entropy_coeff": 0.01, "seed": 1, "reward_params": {"break_penalty": 3.0, "shaping_coeff": 0.5, "step_cost": 0.02, "waste_penalty": 0.0, "bin_reward": 1.0}}
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /root/.netrc.
+wandb: Currently logged in as: rambo-ramon-rainer (rambo-ramon-rainer-foo-research-inc-) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run f0fnafnp
+wandb: Tracking run with wandb version 0.27.0
+wandb: Run data is saved locally in /root/capstone-florian/wandb/run-20260623_014713-f0fnafnp
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run long-5x5-default
+wandb: ⭐️ View project at https://wandb.ai/rambo-ramon-rainer-foo-research-inc-/arena8-capstone
+wandb: 🚀 View run at https://wandb.ai/rambo-ramon-rainer-foo-research-inc-/arena8-capstone/runs/f0fnafnp
+EVAL step     0  rand_regret 3.1874  rand_solved 0.000  rand_max 9.85  walls_regret 3.889  walls_break 0.00
+EVAL step   250  rand_regret 0.0711  rand_solved 0.959  rand_max 6.89  walls_regret 3.889  walls_break 0.00
+EVAL step   500  rand_regret 0.0324  rand_solved 0.971  rand_max 4.06  walls_regret 3.889  walls_break 0.00
+EVAL step   750  rand_regret 0.0419  rand_solved 0.957  rand_max 4.06  walls_regret 3.889  walls_break 0.00
+EVAL step  1000  rand_regret 0.0409  rand_solved 0.965  rand_max 5.64  walls_regret 3.889  walls_break 0.00
+EVAL step  1250  rand_regret 0.0435  rand_solved 0.971  rand_max 5.96  walls_regret 7.584  walls_break 0.67
+EVAL step  1500  rand_regret 0.0316  rand_solved 0.975  rand_max 4.06  walls_regret 3.889  walls_break 0.00
+EVAL step  1750  rand_regret 0.0276  rand_solved 0.977  rand_max 3.16  walls_regret 3.786  walls_break 0.00
+EVAL step  2000  rand_regret 0.0216  rand_solved 0.973  rand_max 4.06  walls_regret 3.889  walls_break 0.00
+EVAL step  2250  rand_regret 0.0269  rand_solved 0.975  rand_max 3.00  walls_regret 3.889  walls_break 0.00
+EVAL step  2500  rand_regret 0.0430  rand_solved 0.969  rand_max 4.45  walls_regret 3.889  walls_break 0.00
+EVAL step  2750  rand_regret 0.0371  rand_solved 0.973  rand_max 4.06  walls_regret 3.889  walls_break 0.00
+wandb: updating run metadata
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json
+wandb: 
+wandb: Run history:
+wandb:    actor-clip ▁██▇▃▄▅█▃▅▆▅
+wandb:     actor-kl1 ▁▇▇▅▁▆▅▆▂▆█▄
+wandb:     actor-kl3 ▁▇▇▅▁▅▄▆▂▆█▄
+wandb:   critic-clip █▁▁▁▁▁▁▁▁▁▁▁
+wandb:       entropy █▁▁▂▂▁▂▂▂▁▁▂
+wandb:          loss █▁▁▁▁▁▁▁▁▁▁▁
+wandb:    loss-actor ▁█▇▆▆▇▆▇▆▇▇▅
+wandb:   loss-critic █▁▁▁▁▁▁▁▁▁▁▁
+wandb:  random_break █▂▂▁▁▁▂▁▂▁▂▁
+wandb: random_regret █▁▁▁▁▁▁▁▁▁▁▁
+wandb:            +8 ...
+wandb: 
+wandb: Run summary:
+wandb:    actor-clip 0.09466
+wandb:     actor-kl1 0.00265
+wandb:     actor-kl3 0.00263
+wandb:   critic-clip 0.00306
+wandb:       entropy 1.32294
+wandb:          loss -0.01135
+wandb:    loss-actor 0.00112
+wandb:   loss-critic 0.00152
+wandb:  random_break 0.00586
+wandb: random_regret 0.03714
+wandb:            +8 ...
+wandb: 
+wandb: 🚀 View run long-5x5-default at: https://wandb.ai/rambo-ramon-rainer-foo-research-inc-/arena8-capstone/runs/f0fnafnp
+wandb: ⭐️ View project at: https://wandb.ai/rambo-ramon-rainer-foo-research-inc-/arena8-capstone
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260623_014713-f0fnafnp/logs
+
+=== long-5x5-default  (wall 64.5 min, 3000 steps) ===
+reward params: {'break_penalty': 3.0, 'shaping_coeff': 0.5, 'step_cost': 0.02, 'waste_penalty': 0.0, 'bin_reward': 1.0}
+    random: regret +0.030 (max +4.763)  optimal +1.485  achieved +1.456  break-rate 0.00  solved 0.98  n=2000
+     walls: regret +3.889 (max +4.815)  optimal +2.361  achieved -1.528  break-rate 0.00  solved 0.00  n=3
+
+saved net -> agent_long_5x5.pt  config+metrics -> agent_long_5x5.json
+SUMMARY {"random": {"mean_regret": 0.02971366047859192, "max_regret": 4.762639999389648, "frac_solved": 0.9789999723434448, "break_rate": 0.0044999998062849045, "mean_optimal": 1.4853787422180176, "mean_achieved": 1.4556652307510376, "n": 2000}, "walls": {"mean_regret": 3.8886613845825195, "max_regret": 4.814547538757324, "frac_solved": 0.0, "break_rate": 0.0, "mean_optimal": 2.360816240310669, "mean_achieved": -1.5278449058532715, "n": 3}}

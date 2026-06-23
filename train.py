@@ -98,6 +98,8 @@ def train_agent_multienv(
     progress: bool = True,
     regret_frac: float = 0.1,
     regret_every: int = 10,
+    eval_fn: Callable[[ActorCriticNetwork, int], dict[str, float]] | None = None,
+    eval_every: int = 0,
     wandb_project: str | None = None,
     wandb_run_name: str | None = None,
 ) -> tuple[ActorCriticNetwork, list[dict[str, float]]]:
@@ -230,6 +232,11 @@ def train_agent_multienv(
             achieved_mean = returns_per_env[:regret_num_envs].mean().item()
             metrics["regret"] = optimal_mean - achieved_mean
             metrics["step"] = step  # history is sparse; record the true step index
+            # optional held-out evaluation (e.g. rare-env regret on a fixed set).
+            # `eval_every` should be a multiple of `regret_every` so the eval
+            # metrics land on a scored step and are logged alongside the rest.
+            if eval_fn is not None and eval_every > 0 and step % eval_every == 0:
+                metrics.update(eval_fn(net, step))
             history.append(metrics)
             if wandb_run is not None:
                 wandb_run.log(metrics, step=step)

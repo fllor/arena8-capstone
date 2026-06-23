@@ -44,6 +44,7 @@ def ppo_train_step_multienv(
     num_epochs: int = 4,
     minibatch_size: int = 4096,
     generator: torch.Generator | None = None,
+    update: bool = True,
 ) -> tuple[dict[str, float], torch.Tensor]:
     """
     One PPO training step across a batch of environments: collect one rollout
@@ -58,6 +59,13 @@ def ppo_train_step_multienv(
     (losses/diagnostics averaged over all minibatch updates) and the discounted
     return achieved in each environment's rollout, a `[num_envs]` tensor in the
     same order as `envs` (so it can be paired per-level with an oracle optimum).
+
+    With `update=False`, this is a *score-only* rollout: experience is collected
+    and `returns_per_env` is computed, but no gradient update is taken (the GAE
+    and minibatch SGD are skipped entirely). This is the stop-gradient path
+    PLR-bot needs for newly-generated levels -- the policy must not learn from
+    them, only have its regret on them measured. The returned metrics then carry
+    just the rollout `"return"` (no loss/diagnostics).
     """
     assert envs.num_envs is not None, (
         "got a single environment; add a batch dimension to the environment "
@@ -84,6 +92,13 @@ def ppo_train_step_multienv(
             flat_transitions.action,
             flat_transitions.next_state,
         ).view(B, T)
+
+    # score-only (stop-gradient) path: skip GAE + the update entirely, just
+    # report the achieved per-env return so the caller can compute regret.
+    if not update:
+        returns_per_env = compute_return(rewards, discount_rate)
+        return {"return": returns_per_env.mean().item()}, returns_per_env
+
     # estimate advantages on the collected experience...
     advantages = generalised_advantage_estimation(
         rewards=rewards,

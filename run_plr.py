@@ -26,6 +26,7 @@ from plr import PLRConfig, train_agent_plr
 from potteryshop import Action, Item
 from rewards import reward2
 from train import default_device
+from utils import rollout_regret_grid, wall_envs
 
 device = default_device()
 print(f"using device: {device}")
@@ -73,14 +74,15 @@ config = PLRConfig(
     gen=gen,
     net=net,
     reward_fn=reward2,
-    num_train_steps=600,  # ~5 min on an A40
-    num_envs=256*8,
+    num_train_steps=300, # ~6min
+    num_envs=8192,
+    minibatch_size=16384,  # should be 2*num_envs to get 32 gradient updates
     replay_prob=0.5,
     buffer_capacity=4096,
     device=device,
     seed=1,
     eval_fn=eval_fn,
-    eval_every=100,
+    eval_every=10,
     log_every=10,
     wandb_project=WANDB_PROJECT,
 )

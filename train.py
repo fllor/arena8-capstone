@@ -13,6 +13,7 @@ This module is a library of reusable functions (`train_agent_multienv`,
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Callable
 
 import torch
@@ -20,57 +21,10 @@ from tqdm import tqdm
 
 from agent import ActorCriticNetwork
 from evaluation import RewardFunction
-from potteryshop import Environment, Item
+from potteryshop import Environment
 from ppo import ppo_train_step_multienv
 from rewards import DISCOUNT_RATE
 from solver import compute_optimal_return
-
-# Peak DP state count (chunk_size * N) the oracle is allowed to materialise at
-# once, where N = cells * 2 * 2^shards * 3^urns. The per-level transition tables
-# are O(chunk * N), so this bounds peak solver memory regardless of how dense a
-# level is. ~1e6 states keeps the GPU footprint to a few hundred MB, leaving the
-# training rollout buffers room (the full-batch solve used to OOM here).
-_REGRET_STATE_BUDGET = 1_000_000
-
-
-def _mean_optimal_return(
-    envs: Environment,
-    discount_rate: float,
-    horizon: int,
-) -> float:
-    """
-    Exact mean oracle optimal return over the whole batch, without ever sizing
-    the DP to the batch's densest level.
-
-    `compute_optimal_return` pads its compact state to the *batch maximum* shard
-    and urn counts, so a single dense level inflates `N = C·2·2^S·3^U` — and
-    thus memory — for every level sharing its chunk. We instead group levels by
-    their exact `(shards, urns)` counts: each group gets its own minimal `N`, so
-    sparse groups solve in wide parallel chunks while the rare dense groups fall
-    back to small chunks (one level at a time in the limit). Every level is still
-    scored, so the returned mean is exact — no subsampling, no distortion.
-    """
-    items = envs.init_items_map.flatten(1)  # [B, cells]
-    n_shard = (items == Item.SHARDS).sum(1)
-    n_urn = (items == Item.URN).sum(1)
-    cells = envs.world_size ** 2
-
-    total = 0.0
-    count = 0
-    # one group per distinct (shards, urns) pair; within a group N is constant
-    for s, u in torch.unique(torch.stack([n_shard, n_urn], dim=1), dim=0).tolist():
-        idx = ((n_shard == s) & (n_urn == u)).nonzero(as_tuple=True)[0]
-        n_states = cells * 2 * (1 << s) * (3 ** u)
-        chunk_size = max(1, _REGRET_STATE_BUDGET // n_states)  # serial when dense
-        optimal = compute_optimal_return(
-            envs[idx],
-            discount_rate=discount_rate,
-            horizon=horizon,
-            chunk_size=chunk_size,
-        )
-        total += optimal.sum().item()
-        count += idx.numel()
-    return total / count
 
 
 def default_device() -> torch.device:
@@ -81,27 +35,39 @@ def default_device() -> torch.device:
     return torch.device("cpu")
 
 
+@dataclass
+class TrainConfig:
+    """All arguments for `train_agent_multienv`, with sensible defaults.
+
+    `gen`, `net`, and `reward_fn` are required (they have no meaningful default);
+    everything else is a PPO / regret-logging / W&B hyperparameter tuned for the
+    multi-env setup. Build one and hand it to `train_agent_multienv(config)`.
+    """
+
+    gen: Callable[..., Environment]
+    net: ActorCriticNetwork
+    reward_fn: RewardFunction
+    num_train_steps: int = 4096
+    num_envs: int = 256
+    num_env_steps: int = 64
+    num_epochs: int = 4
+    minibatch_size: int = 4096
+    discount_rate: float = DISCOUNT_RATE
+    entropy_coeff: float = 0.01  # needs more exploration than single-env
+    lr: float = 0.001
+    device: torch.device | str | None = None
+    seed: int = 1
+    progress: bool = True
+    regret_frac: float = 0.1
+    regret_every: int = 10
+    eval_fn: Callable[[ActorCriticNetwork, int], dict[str, float]] | None = None
+    eval_every: int = 0
+    wandb_project: str | None = None
+    wandb_run_name: str | None = None
+
+
 def train_agent_multienv(
-    gen: Callable[..., Environment],
-    net: ActorCriticNetwork,
-    reward_fn: RewardFunction,
-    num_train_steps: int = 4096,
-    num_envs: int = 256,
-    num_env_steps: int = 64,
-    num_epochs: int = 4,
-    minibatch_size: int = 4096,
-    discount_rate: float = DISCOUNT_RATE,
-    entropy_coeff: float = 0.01,  # needs more exploration than single-env
-    lr: float = 0.001,
-    device: torch.device | str | None = None,
-    seed: int = 1,
-    progress: bool = True,
-    regret_frac: float = 0.1,
-    regret_every: int = 10,
-    eval_fn: Callable[[ActorCriticNetwork, int], dict[str, float]] | None = None,
-    eval_every: int = 0,
-    wandb_project: str | None = None,
-    wandb_run_name: str | None = None,
+    config: TrainConfig,
 ) -> tuple[ActorCriticNetwork, list[dict[str, float]]]:
     """
     Train `net` in place, resampling `num_envs` random layouts from `gen` every
@@ -127,6 +93,27 @@ def train_agent_multienv(
     Weights & Biases under that project (optional dependency, imported lazily;
     `wandb_run_name` names the run). Logging is off by default.
     """
+    gen = config.gen
+    net = config.net
+    reward_fn = config.reward_fn
+    num_train_steps = config.num_train_steps
+    num_envs = config.num_envs
+    num_env_steps = config.num_env_steps
+    num_epochs = config.num_epochs
+    minibatch_size = config.minibatch_size
+    discount_rate = config.discount_rate
+    entropy_coeff = config.entropy_coeff
+    lr = config.lr
+    device = config.device
+    seed = config.seed
+    progress = config.progress
+    regret_frac = config.regret_frac
+    regret_every = config.regret_every
+    eval_fn = config.eval_fn
+    eval_every = config.eval_every
+    wandb_project = config.wandb_project
+    wandb_run_name = config.wandb_run_name
+
     device = torch.device(device) if device is not None else default_device()
     net = net.to(device)
     regret_num_envs = max(1, int(num_envs * regret_frac))
@@ -181,9 +168,9 @@ def train_agent_multienv(
     def _solve_async(envs_slice, ready_event):
         with torch.cuda.stream(regret_stream):
             regret_stream.wait_event(ready_event)  # wait until the slice is ready
-            return _mean_optimal_return(
+            return compute_optimal_return(
                 envs_slice, discount_rate=discount_rate, horizon=num_env_steps
-            )
+            ).mean().item()
 
     history: list[dict[str, float]] = []
     steps = tqdm(range(num_train_steps)) if progress else range(num_train_steps)

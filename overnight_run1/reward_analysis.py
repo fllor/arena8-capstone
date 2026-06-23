@@ -26,7 +26,8 @@ import torch
 
 import rewards
 from evalsuite import build_eval_sets, wall_envs
-from solver import compute_optimal_return_grouped
+# master renamed the grouped/safe solver entry point to `compute_optimal_return`.
+from solver import compute_optimal_return as compute_optimal_return_grouped
 
 NO_BREAK = 1e6  # break penalty so large the optimal never smashes an urn
 

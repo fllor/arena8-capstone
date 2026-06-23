@@ -57,7 +57,7 @@ from rewards import DISCOUNT_RATE
 # The solver mirrors `rewards.reward2` exactly. Rather than copy the tunable
 # reward parameters at import (which would silently go stale if a sweep changes
 # them), the public entry points read them from the `rewards` module at call
-# time -- see `compute_optimal_return`, whose `None` defaults resolve to the
+# time -- see `compute_optimal_return_raw`, whose `None` defaults resolve to the
 # current `rewards.*` globals. This keeps the oracle in lock-step with whatever
 # reward the training run is using.
 
@@ -248,7 +248,7 @@ def _build_transitions(
 
 
 @torch.no_grad()
-def compute_optimal_return(
+def compute_optimal_return_raw(
     envs: Environment,
     discount_rate: float = DISCOUNT_RATE,
     horizon: int = 64,
@@ -261,6 +261,12 @@ def compute_optimal_return(
     chunk_size: int = 512,
 ) -> Float[Tensor, "B"]:
     """
+    Low-level DP engine -- sizes its compact state to the *batch-max* shard/urn
+    counts. Most callers want `compute_optimal_return`, which groups levels by
+    their exact `(shards, urns)` so a single dense level can't inflate -- and OOM
+    -- the whole batch. Call this directly only on a batch already known to be
+    uniform in `(shards, urns)` (as `compute_optimal_return` does internally).
+
     Exact optimal discounted return for each layout in `envs`, over `horizon`
     steps with discount `discount_rate`, under the `reward2` reward.
 
@@ -269,9 +275,7 @@ def compute_optimal_return(
     made via `rewards.set_reward_params(...)`. Pass an explicit value to override
     one (e.g. `break_penalty=100` to probe the no-break optimum).
 
-    Returns a CPU float tensor of shape [B] (one optimal return per level),
-    matching the per-level layout of `evaluate_behaviour`'s policy returns so
-    regret is just `compute_optimal_return(envs) - policy_returns`.
+    Returns a CPU float tensor of shape [B] (one optimal return per level).
     """
     break_penalty = rewards.BREAK_PENALTY if break_penalty is None else break_penalty
     per_step_cost = rewards.STEP_COST if per_step_cost is None else per_step_cost
@@ -317,23 +321,27 @@ _STATE_BUDGET = 1_000_000
 
 
 @torch.no_grad()
-def compute_optimal_return_grouped(
+def compute_optimal_return(
     envs: Environment,
     *,
     state_budget: int = _STATE_BUDGET,
     **kwargs,
 ) -> Float[Tensor, "B"]:
     """
-    Per-level optimal return that is safe on heterogeneous batches.
+    Exact per-level optimal return -- the safe default entry point.
 
-    `compute_optimal_return` pads its compact DP state to the *batch-max* shard
-    and urn counts, so a single dense level inflates `N = C*2*2^S*3^U` -- and
-    thus memory -- for every level in its chunk; on a random batch with a
+    `compute_optimal_return_raw` pads its compact DP state to the *batch-max*
+    shard and urn counts, so a single dense level inflates `N = C*2*2^S*3^U` --
+    and thus memory -- for every level in its chunk; on a random batch with a
     high-urn tail outlier this OOMs. Here we group levels by their exact
     `(#shards, #urns)`: each group gets its own minimal `N` and a chunk size
     derived from `state_budget`, so sparse groups solve in wide chunks while rare
     dense groups fall back to small (down to one-level) chunks. Returns a CPU
-    `[B]` tensor in the original input order; results are exact (no subsampling).
+    `[B]` tensor in the original input order; results are exact (no subsampling)
+    and identical to `compute_optimal_return_raw` (padding adds only inert slots).
+
+    Matches the per-level layout of `evaluate_behaviour`'s policy returns, so
+    regret is just `compute_optimal_return(envs) - policy_returns`.
     """
     items = envs.init_items_map.flatten(1)
     n_shard = (items == Item.SHARDS).sum(1)
@@ -345,7 +353,7 @@ def compute_optimal_return_grouped(
         idx = ((n_shard == s) & (n_urn == u)).nonzero(as_tuple=True)[0]
         n_states = cells * 2 * (1 << s) * (3 ** u)
         chunk = max(1, state_budget // max(1, n_states))
-        out[idx] = compute_optimal_return(envs[idx], chunk_size=chunk, **kwargs)
+        out[idx] = compute_optimal_return_raw(envs[idx], chunk_size=chunk, **kwargs)
     return out
 
 

@@ -1,226 +1,172 @@
 """
-Prioritised Level Replay (PLR-perp / robust PLR) for the pottery shop.
+Robust PLR (PLR-bot) training driver for the pottery shop.
 
-Implements the curator half of Dual Curriculum Design (Jiang et al. 2021,
-`doc/2110.02439.txt`, Algorithm 1) with the oracle-latest regret estimator from
-Abdel Sadek, Farrugia-Roberts et al. (RLC 2025, `doc/2507.03068.txt`, eq. 4):
+This is the regret-curriculum counterpart to `train.train_agent_multienv` (which
+stays pure domain randomisation). The loop curates a `LevelSampler` buffer keyed
+by *oracle regret* and, each step, takes one of two branches:
 
-    regret(theta) = max_pi' V(pi', theta)  -  V_latest(pi, theta)
-                    \___ solver.py oracle      \___ policy rollout return
+* **generate** (probability `1 - replay_prob`, and always until the buffer is
+  filled past `minimum_fill_ratio`): sample a fresh batch from `gen`, roll the
+  policy out on it *without a gradient update* (the PLR-bot stop-gradient), score
+  it by oracle regret, and offer it to the buffer.
+* **replay**: sample a high-regret batch from the buffer, take a real PPO update
+  on it, and refresh those levels' regret scores.
 
-The student is PPO (`ppo_train_step_multienv`); the adversary is buffer curation
-with a random generator (no learned adversary). Each training step is either:
+Only replay steps move the policy -- that is what makes the buffer (a
+regret-maximising adversary) the thing the student is trained against, so at
+equilibrium the policy is minimax-regret (Jiang et al. 2021a). The oracle optimum
+in the regret is exact (`solver.compute_optimal_return`) and cached per
+level, so the expensive solve runs only on generate steps, never on replay.
 
-  * EXPLORE (replay-decision d=0): sample a *fresh* batch from `gen`, score every
-    level by oracle regret, admit the high-regret ones to the buffer -- and take
-    NO gradient step (the "perp"/stop-gradient of PLR-perp: avoid training on
-    randomly-sampled levels so the equilibrium policy is minimax-regret; see
-    2110.02439 Cor. 1 / lines 327-331).
-  * REPLAY (d=1): sample a batch from the buffer by regret priority, run one PPO
-    update on it, then re-score those levels and refresh their staleness.
-
-This is the curriculum drop-in for `train_agent_multienv` (in `train.py`, the DR
-baseline, left untouched). ACCEL (Day 3) extends this by editing buffer levels
-before re-scoring -- the buffer + scoring machinery here is what it builds on.
+The `gen` seam, network, reward function, PPO step, and oracle solver are all
+reused unchanged from the DR path; only the loop differs.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 import torch
 from tqdm import tqdm
 
 from agent import ActorCriticNetwork
-from evaluation import RewardFunction, compute_return
-from potteryshop import Environment, collect_rollout, tree_map
+from evaluation import RewardFunction
+from level_sampler import LevelSampler
+from potteryshop import Environment, Item
 from ppo import ppo_train_step_multienv
 from rewards import DISCOUNT_RATE
-from solver import compute_optimal_return_grouped
+from solver import compute_optimal_return
 from train import default_device
 
 
-class PLRBuffer:
+def _buffer_stats(sampler: LevelSampler) -> dict[str, float]:
+    """Buffer-composition diagnostics (the 'is it learning to build walls?' view)."""
+    n = sampler.size
+    if n == 0:
+        return {"buffer/size": 0}
+    items = sampler.levels.init_items_map[:n]
+    urns = (items == Item.URN).flatten(1).sum(1).float()
+    scores = sampler.scores[:n]
+    return {
+        "buffer/size": float(n),
+        "buffer/mean_score": scores.mean().item(),
+        "buffer/max_score": scores.max().item(),
+        "buffer/mean_urns": urns.mean().item(),
+        "buffer/max_urns": urns.max().item(),
+    }
+
+
+@dataclass
+class PLRConfig:
+    """All arguments for `train_agent_plr`, with sensible defaults.
+
+    `gen`, `net`, and `reward_fn` are required (they have no meaningful default);
+    everything else is a PPO, PLR-buffer, or logging hyperparameter. The PPO
+    defaults are tuned for PLR (see `train_agent_plr`'s docstring). Build one and
+    hand it to `train_agent_plr(config)`.
     """
-    A fixed-capacity store of levels keyed by oracle regret, with rank-based
-    prioritised sampling (Jiang et al. 2021, Sec. 3).
 
-    Stores each level's layout (robot/items/bin), its last regret score, and the
-    step it was last scored (for staleness). Levels live on CPU to keep GPU
-    memory for the rollout buffers; `sample` returns a CPU `Environment` batch
-    that the caller moves to the training device.
-
-    Sampling probability mixes a rank-based regret term with a staleness term
-    (Jiang et al. Sec. 3, eq. for `P_replay`):
-
-        P = (1 - rho) * P_regret + rho * P_staleness
-        P_regret(level) prop. (1 / rank)^(1 / beta)   (rank 1 = highest regret)
-
-    `rho` (staleness coeff) keeps stale scores from going unrefreshed; lower
-    `beta` makes the regret term peakier (more aggressively favours the top).
-    """
-
-    def __init__(
-        self,
-        capacity: int,
-        world_size: int,
-        staleness_coeff: float = 0.1,
-        prioritisation_beta: float = 0.3,
-        seed: int = 0,
-    ):
-        self.capacity = capacity
-        self.rho = staleness_coeff
-        self.beta = prioritisation_beta
-        ws = world_size
-        self.robot = torch.zeros((capacity, 2), dtype=torch.long)
-        self.items = torch.zeros((capacity, ws, ws), dtype=torch.long)
-        self.bin = torch.zeros((capacity, 2), dtype=torch.long)
-        self.scores = torch.zeros(capacity, dtype=torch.float32)
-        self.last_seen = torch.zeros(capacity, dtype=torch.long)
-        self.size = 0
-        # dedicated CPU generator: multinomial over a CPU probability vector
-        # needs a CPU generator, independent of the (possibly CUDA) train rng.
-        self._gen = torch.Generator().manual_seed(seed)
-
-    def __len__(self) -> int:
-        return self.size
-
-    @property
-    def mean_score(self) -> float:
-        return self.scores[: self.size].mean().item() if self.size else 0.0
-
-    def _envs_at(self, idx: torch.Tensor) -> Environment:
-        return Environment(
-            init_robot_pos=self.robot[idx].clone(),
-            init_items_map=self.items[idx].clone(),
-            bin_pos=self.bin[idx].clone(),
-        )
-
-    def insert(self, envs: Environment, scores: torch.Tensor, step: int) -> None:
-        """
-        Admit fresh levels, keeping the top-`capacity` by regret. New candidates
-        are concatenated with the current contents and the highest-scoring
-        `capacity` are retained (so a high-regret newcomer evicts the lowest-
-        regret incumbent; if there is room, everything is kept).
-        """
-        r = envs.init_robot_pos.detach().cpu()
-        it = envs.init_items_map.detach().cpu()
-        b = envs.bin_pos.detach().cpu()
-        s = scores.detach().cpu().float()
-        n = s.shape[0]
-        last = torch.full((n,), step, dtype=torch.long)
-
-        cat_r = torch.cat([self.robot[: self.size], r])
-        cat_it = torch.cat([self.items[: self.size], it])
-        cat_b = torch.cat([self.bin[: self.size], b])
-        cat_s = torch.cat([self.scores[: self.size], s])
-        cat_last = torch.cat([self.last_seen[: self.size], last])
-
-        total = self.size + n
-        if total <= self.capacity:
-            sel = torch.arange(total)
-        else:
-            sel = torch.topk(cat_s, self.capacity).indices
-        self.size = min(total, self.capacity)
-        self.robot[: self.size] = cat_r[sel]
-        self.items[: self.size] = cat_it[sel]
-        self.bin[: self.size] = cat_b[sel]
-        self.scores[: self.size] = cat_s[sel]
-        self.last_seen[: self.size] = cat_last[sel]
-
-    def sample(self, num: int, step: int) -> tuple[Environment, torch.Tensor]:
-        """
-        Draw `num` levels (with replacement) by the mixed regret/staleness
-        priority. Returns the CPU `Environment` batch and the buffer indices it
-        came from (so the caller can re-score those slots after a PPO update).
-        """
-        assert self.size > 0, "cannot sample from an empty buffer"
-        scores = self.scores[: self.size]
-
-        # rank-based regret priority: rank 1 = highest regret.
-        order = torch.argsort(scores, descending=True)
-        ranks = torch.empty(self.size, dtype=torch.float32)
-        ranks[order] = torch.arange(1, self.size + 1, dtype=torch.float32)
-        w_regret = (1.0 / ranks) ** (1.0 / self.beta)
-        p_regret = w_regret / w_regret.sum()
-
-        # staleness priority: favour levels not scored recently.
-        age = (step - self.last_seen[: self.size]).float()
-        p_stale = age / age.sum() if age.sum() > 0 else torch.full_like(age, 1.0 / self.size)
-
-        p = (1.0 - self.rho) * p_regret + self.rho * p_stale
-        idx = torch.multinomial(p, num, replacement=True, generator=self._gen)
-        return self._envs_at(idx), idx
-
-    def update(self, idx: torch.Tensor, scores: torch.Tensor, step: int) -> None:
-        """Refresh regret scores and staleness for replayed levels."""
-        s = scores.detach().cpu().float()
-        # de-duplicate (sampling is with replacement): keep the last write per
-        # slot, which is well-defined since duplicates carry the same level.
-        self.scores[idx] = s
-        self.last_seen[idx] = step
+    gen: Callable[..., Environment]
+    net: ActorCriticNetwork
+    reward_fn: RewardFunction
+    num_train_steps: int = 4096
+    num_envs: int = 256
+    num_env_steps: int = 64
+    num_epochs: int = 1
+    minibatch_size: int = 512
+    discount_rate: float = DISCOUNT_RATE
+    entropy_coeff: float = 0.01
+    lr: float = 0.003
+    device: torch.device | str | None = None
+    seed: int = 1
+    progress: bool = True
+    # --- PLR knobs ---
+    buffer_capacity: int = 4096
+    replay_prob: float = 0.5
+    staleness_coeff: float = 0.1
+    temperature: float = 0.1
+    minimum_fill_ratio: float = 0.5
+    duplicate_check: bool = True
+    log_every: int = 1
+    eval_fn: Callable[[ActorCriticNetwork, int], dict[str, float]] | None = None
+    eval_every: int = 0
+    # write `net.state_dict()` to `checkpoint_path` every `checkpoint_every`
+    # steps (0 disables) so an unattended run loses at most that many steps.
+    checkpoint_path: str | None = None
+    checkpoint_every: int = 0
+    wandb_project: str | None = None
+    wandb_run_name: str | None = None
 
 
 def train_agent_plr(
-    gen: Callable[..., Environment],
-    net: ActorCriticNetwork,
-    reward_fn: RewardFunction,
-    num_train_steps: int = 300,
-    num_envs: int = 4096,
-    num_env_steps: int = 64,
-    num_epochs: int = 1,
-    minibatch_size: int = 16384,
-    discount_rate: float = DISCOUNT_RATE,
-    entropy_coeff: float = 0.01,
-    lr: float = 0.003,
-    device: torch.device | str | None = None,
-    seed: int = 1,
-    progress: bool = True,
-    replay_prob: float = 0.5,
-    buffer_capacity: int | None = None,
-    staleness_coeff: float = 0.1,
-    prioritisation_beta: float = 0.3,
-    eval_fn: Callable[..., dict] | None = None,
-    eval_every: int = 0,
-    checkpoint_path: str | None = None,
-    checkpoint_every: int = 0,
-    wandb_project: str | None = None,
-    wandb_run_name: str | None = None,
-) -> tuple[ActorCriticNetwork, list[dict[str, float]], PLRBuffer]:
+    config: PLRConfig,
+) -> tuple[ActorCriticNetwork, list[dict[str, float]], LevelSampler]:
     """
-    Train `net` with PLR-perp: a regret-keyed level buffer feeds PPO replay
-    updates while fresh random levels are used only to curate the buffer.
+    Train `net` in place with robust PLR. Returns `(net, history, sampler)`; the
+    sampler is returned so its buffer can be inspected/visualised afterwards.
 
-    Same `gen` signature as `train_agent_multienv` (`gen(num_envs=, generator=)`),
-    so it is a drop-in swap for the DR baseline. Returns the trained network, the
-    per-replay-step metric history (same keys as the DR trainer plus `regret`,
-    `buffer_size`, `buffer_mean_score`, so `run.py`'s plotting still works), and
-    the final buffer (for visualising what the curriculum learned to keep).
+    `gen` has the same `(num_envs=, generator=)` signature as for the DR driver,
+    so the existing fixed-bin generator is reused as the base distribution.
 
-    `replay_prob` is the Bernoulli p of Algorithm 1: the fraction of steps that
-    train on the buffer (the rest explore + curate). Until the buffer has any
-    content, every step is forced to explore.
+    The PPO defaults are tuned for PLR: with `num_envs=256`, `num_env_steps=64`
+    (collection size N=16384), `num_epochs=1` and `minibatch_size=512` give the
+    ~32 gradient updates per collection that the DR HPO found to be the learning
+    sweet spot (fewer undertrains, far more drifts off-policy). `replay_prob=0.5`
+    balances policy updates against keeping the buffer fed with fresh high-regret
+    levels -- raising it trains faster on random levels but starves (and lowers
+    the quality of) the buffer, which is the curriculum PLR exists to build. If
+    you change `num_envs`, rescale `minibatch_size` to keep N/minibatch ≈ 32.
 
-    Cost note: unlike the DR trainer (which oracle-scores only a 10% slice every
-    10th step), PLR oracle-scores *every* batch -- explore steps to decide
-    admission, replay steps to refresh priorities. The per-level solver groups by
-    density so this stays bounded, but keep `num_envs` modest (a few thousand).
+    Regret is logged every step (cheap: the oracle optimum is solved on generate
+    steps and cached, the achieved return comes free from the rollout), split into
+    `regret/generate` (fresh levels, the DR-equivalent signal) and `regret/replay`
+    (buffer levels, which should run high). PPO `log_every`-th steps record a
+    metric dict tagged with the true `step` index and the branch taken.
     """
+    gen = config.gen
+    net = config.net
+    reward_fn = config.reward_fn
+    num_train_steps = config.num_train_steps
+    num_envs = config.num_envs
+    num_env_steps = config.num_env_steps
+    num_epochs = config.num_epochs
+    minibatch_size = config.minibatch_size
+    discount_rate = config.discount_rate
+    entropy_coeff = config.entropy_coeff
+    lr = config.lr
+    device = config.device
+    seed = config.seed
+    progress = config.progress
+    buffer_capacity = config.buffer_capacity
+    replay_prob = config.replay_prob
+    staleness_coeff = config.staleness_coeff
+    temperature = config.temperature
+    minimum_fill_ratio = config.minimum_fill_ratio
+    duplicate_check = config.duplicate_check
+    log_every = config.log_every
+    eval_fn = config.eval_fn
+    eval_every = config.eval_every
+    checkpoint_path = config.checkpoint_path
+    checkpoint_every = config.checkpoint_every
+    wandb_project = config.wandb_project
+    wandb_run_name = config.wandb_run_name
+
     device = torch.device(device) if device is not None else default_device()
     net = net.to(device)
-    if buffer_capacity is None:
-        buffer_capacity = num_envs
-
     gen_device = device if device.type == "cuda" else torch.device("cpu")
     generator = torch.Generator(device=gen_device).manual_seed(seed)
-    decision_gen = torch.Generator().manual_seed(seed + 1)  # CPU: replay coin flips
     optimiser = torch.optim.Adam(net.parameters(), lr=lr)
 
-    buffer = PLRBuffer(
+    pholder = gen(num_envs=1, generator=generator)[0]
+    sampler = LevelSampler(
+        pholder_level=pholder,
         capacity=buffer_capacity,
-        world_size=gen(num_envs=1, generator=torch.Generator().manual_seed(0)).world_size,
+        replay_prob=replay_prob,
         staleness_coeff=staleness_coeff,
-        prioritisation_beta=prioritisation_beta,
+        temperature=temperature,
+        minimum_fill_ratio=minimum_fill_ratio,
+        duplicate_check=duplicate_check,
         seed=seed,
     )
 
@@ -232,7 +178,7 @@ def train_agent_plr(
             project=wandb_project,
             name=wandb_run_name,
             config={
-                "algo": "PLR-perp",
+                "algo": "plr",
                 "num_train_steps": num_train_steps,
                 "num_envs": num_envs,
                 "num_env_steps": num_env_steps,
@@ -242,97 +188,92 @@ def train_agent_plr(
                 "entropy_coeff": entropy_coeff,
                 "lr": lr,
                 "seed": seed,
-                "replay_prob": replay_prob,
                 "buffer_capacity": buffer_capacity,
+                "replay_prob": replay_prob,
                 "staleness_coeff": staleness_coeff,
-                "prioritisation_beta": prioritisation_beta,
+                "temperature": temperature,
+                "minimum_fill_ratio": minimum_fill_ratio,
                 "device": str(device),
             },
         )
 
-    def _achieved_returns(rollout) -> torch.Tensor:
-        B, T = rollout.transitions.action.shape
-        flat = tree_map(lambda x: x.flatten(0, 1), rollout.transitions)
-        with torch.no_grad():
-            rewards = reward_fn(flat.state, flat.action, flat.next_state).view(B, T)
-        return compute_return(rewards, discount_rate)
+    def _ppo(envs: Environment, update: bool):
+        return ppo_train_step_multienv(
+            net=net,
+            envs=envs,
+            reward_fn=reward_fn,
+            optimiser=optimiser,
+            num_env_steps=num_env_steps,
+            num_epochs=num_epochs,
+            minibatch_size=minibatch_size,
+            discount_rate=discount_rate,
+            eligibility_rate=0.95,
+            proximity_eps=0.1,
+            critic_coeff=0.5,
+            entropy_coeff=entropy_coeff,
+            max_grad_norm=0.5,
+            generator=generator,
+            update=update,
+        )
 
     history: list[dict[str, float]] = []
+    num_dr = 0
+    num_replay = 0
     steps = tqdm(range(num_train_steps)) if progress else range(num_train_steps)
     try:
         for step in steps:
-            # periodic held-out eval + checkpoint (placed before the branch so it
-            # runs every step regardless of explore/replay; eval_fn is read-only).
-            if eval_fn is not None and eval_every and step % eval_every == 0:
-                eval_metrics = eval_fn(net, step)
-                if wandb_run is not None and eval_metrics:
-                    wandb_run.log(eval_metrics, step=step)
-            if checkpoint_path and checkpoint_every and step > 0 and step % checkpoint_every == 0:
-                torch.save(net.state_dict(), checkpoint_path)
-
-            coin = torch.rand(1, generator=decision_gen).item()
-            replay = len(buffer) > 0 and coin < replay_prob
-
+            replay = sampler.sample_replay_decision()
             if not replay:
-                # EXPLORE: fresh levels, score + curate, NO gradient step.
+                # --- generate: score only, no gradient update (stop-gradient) ---
                 envs = gen(num_envs=num_envs, generator=generator).to(device)
-                with torch.no_grad():
-                    rollout = collect_rollout(
-                        env=envs, policy_fn=net.policy, num_steps=num_env_steps,
-                        generator=generator, device=device, deterministic=False,
-                    )
-                achieved = _achieved_returns(rollout).cpu()
-                optimal = compute_optimal_return_grouped(
+                metrics, returns = _ppo(envs, update=False)
+                optimal = compute_optimal_return(
                     envs, discount_rate=discount_rate, horizon=num_env_steps
                 )
-                regret = (optimal - achieved).clamp_min(0)
-                buffer.insert(envs, regret, step)
+                regret = optimal - returns.cpu()
+                sampler.insert_batch(envs, regret, optimal)
+                metrics["regret/generate"] = regret.mean().item()
+                num_dr += 1
+            else:
+                # --- replay: real PPO update on high-regret buffer levels ---
+                idx, envs = sampler.sample_replay_levels(num_envs)
+                envs = envs.to(device)
+                metrics, returns = _ppo(envs, update=True)
+                optimal = sampler.get_optimal(idx)
+                regret = optimal - returns.cpu()
+                sampler.update_batch(idx, regret)
+                metrics["regret/replay"] = regret.mean().item()
+                num_replay += 1
+
+            if step % log_every == 0:
+                metrics["step"] = step
+                metrics["branch"] = float(replay)
+                metrics["num_dr_updates"] = num_dr
+                metrics["num_replay_updates"] = num_replay
+                metrics.update(_buffer_stats(sampler))
+                if eval_fn is not None and eval_every > 0 and step % eval_every == 0:
+                    metrics.update(eval_fn(net, step))
+                history.append(metrics)
                 if wandb_run is not None:
-                    wandb_run.log(
-                        {
-                            "explore_regret": regret.mean().item(),
-                            "buffer_size": len(buffer),
-                            "buffer_mean_score": buffer.mean_score,
-                        },
-                        step=step,
-                    )
+                    wandb_run.log(metrics, step=step)
                 if progress:
                     steps.set_postfix(
-                        {"mode": "explore", "buf": len(buffer),
-                         "buf_score": round(buffer.mean_score, 3)}
+                        {
+                            "branch": "replay" if replay else "gen",
+                            "regret": regret.mean().item(),
+                            "buf": sampler.size,
+                            "urns": metrics.get("buffer/mean_urns", 0.0),
+                        }
                     )
-                continue
-
-            # REPLAY: buffer levels, one PPO update, then re-score + refresh.
-            envs, idx = buffer.sample(num_envs, step)
-            envs = envs.to(device)
-            metrics, returns_per_env = ppo_train_step_multienv(
-                net=net, envs=envs, reward_fn=reward_fn, optimiser=optimiser,
-                num_env_steps=num_env_steps, num_epochs=num_epochs,
-                minibatch_size=minibatch_size, discount_rate=discount_rate,
-                eligibility_rate=0.95, proximity_eps=0.1, critic_coeff=0.5,
-                entropy_coeff=entropy_coeff, max_grad_norm=0.5, generator=generator,
-            )
-            optimal = compute_optimal_return_grouped(
-                envs, discount_rate=discount_rate, horizon=num_env_steps
-            )
-            regret = (optimal - returns_per_env.cpu()).clamp_min(0)
-            buffer.update(idx, regret, step)
-
-            metrics["regret"] = regret.mean().item()
-            metrics["step"] = step
-            metrics["buffer_size"] = len(buffer)
-            metrics["buffer_mean_score"] = buffer.mean_score
-            history.append(metrics)
-            if wandb_run is not None:
-                wandb_run.log(metrics, step=step)
-            if progress:
-                steps.set_postfix(
-                    {"mode": "replay", "return": round(metrics["return"], 3),
-                     "regret": round(metrics["regret"], 3), "buf": len(buffer)}
-                )
+            if (
+                checkpoint_path
+                and checkpoint_every
+                and step > 0
+                and step % checkpoint_every == 0
+            ):
+                torch.save(net.state_dict(), checkpoint_path)
     finally:
         if wandb_run is not None:
             wandb_run.finish()
 
-    return net, history, buffer
+    return net, history, sampler

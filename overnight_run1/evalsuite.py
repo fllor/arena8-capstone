@@ -31,7 +31,9 @@ from evaluation import compute_return, evaluate_behaviour
 from generate import generate
 from potteryshop import Environment, Item, collect_rollout, tree_map
 from rewards import DISCOUNT_RATE, reward2, reward_break
-from solver import compute_optimal_return_grouped
+# master renamed the grouped/safe solver entry point to `compute_optimal_return`
+# (the old `compute_optimal_return` is now `compute_optimal_return_raw`).
+from solver import compute_optimal_return as compute_optimal_return_grouped
 
 
 def _stack_layouts(layouts: list[tuple], world_size: int) -> Environment:

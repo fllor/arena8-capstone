@@ -28,7 +28,8 @@ from evaluation import compute_return
 from generate import generate
 from potteryshop import Action, collect_rollout, tree_map
 from rewards import reward2, DISCOUNT_RATE
-from solver import compute_optimal_return_grouped
+# master renamed the grouped/safe solver entry point to `compute_optimal_return`.
+from solver import compute_optimal_return as compute_optimal_return_grouped
 from train import default_device, train_agent_multienv
 
 device = default_device()

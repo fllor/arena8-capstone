@@ -33,7 +33,7 @@ from agent import ActorCriticNetwork
 from generate import generate
 from potteryshop import Action
 from rewards import reward2
-from plr import train_agent_plr
+from plr import PLRConfig, train_agent_plr
 from train import default_device
 
 # shared eval harness lives in overnight_run1/
@@ -134,18 +134,22 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.synchronize()
     t0 = time.time()
-    net, history, buffer = train_agent_plr(
+    # master's PLR takes a single PLRConfig. `--beta` (rank prioritisation
+    # temperature) maps to `temperature`; the oracle optimum is cached in the
+    # LevelSampler so replay steps never re-solve (the speedup over the old loop).
+    config = PLRConfig(
         gen=gen, net=net, reward_fn=reward2, num_train_steps=args.steps,
         num_envs=args.num_envs, num_env_steps=args.num_env_steps,
         num_epochs=args.num_epochs, minibatch_size=args.minibatch,
         entropy_coeff=args.entropy_coeff, lr=args.lr, device=device, seed=args.seed,
         replay_prob=args.replay_prob, buffer_capacity=args.buffer_capacity,
-        prioritisation_beta=args.beta, staleness_coeff=args.rho,
+        temperature=args.beta, staleness_coeff=args.rho,
         eval_fn=eval_fn, eval_every=args.eval_every,
         checkpoint_path=ckpt_path, checkpoint_every=args.checkpoint_every,
         wandb_project=args.wandb_project if args.wandb else None,
         wandb_run_name=args.name, progress=False,
     )
+    net, history, sampler = train_agent_plr(config)
     if device.type == "cuda":
         torch.cuda.synchronize()
     wall = time.time() - t0
@@ -159,8 +163,11 @@ def main() -> None:
     for r in final.values():
         print("  " + str(r), flush=True)
 
+    # buffer mean regret over filled slots (empty slots hold -inf in LevelSampler)
+    filled_scores = sampler.scores[torch.isfinite(sampler.scores)]
+    buffer_mean_regret = filled_scores.mean().item() if filled_scores.numel() else 0.0
     summary = dict(cfg=cfg, wall_min=round(wall / 60, 2),
-                   buffer_mean_regret=round(buffer.mean_score, 4), final={
+                   buffer_mean_regret=round(buffer_mean_regret, 4), final={
         name: dict(mean_regret=r.mean_regret, max_regret=r.max_regret,
                    frac_solved=r.frac_solved, break_rate=r.break_rate,
                    mean_optimal=r.mean_optimal, mean_achieved=r.mean_achieved, n=r.n)

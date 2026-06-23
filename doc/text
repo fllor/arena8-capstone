@@ -1,0 +1,25 @@
+Good questions — both get at real design subtleties.
+
+## Replay step: smaller, repeatedly-reused data
+
+Yes, this needs care. The buffer is the bottleneck, and a few things follow:
+
+**It's not actually "less data per step."** On a replay step you still sample a full batch (e.g. 8192 envs) from the buffer — the batch size handed to `ppo_train_step_multienv` is unchanged. What shrinks is the *diversity*: those 8192 draws come from a fixed pool of K≈4–8k unique levels (with replacement, priority-weighted), so the same high-regret levels get trained on repeatedly across steps. That's the intended behaviour (it's the whole point — concentrate gradient on the hard levels), but it raises **overfitting/staleness** risks:
+
+- **Staleness is the built-in mitigation.** This is exactly why the priority is `(1−ρ)·P_regret + ρ·P_staleness` — without the staleness term, the policy hammers the same top-regret levels, their *true* regret drops as it masters them, but the buffer keeps replaying them on the now-stale score. Staleness forces periodic re-visiting/re-scoring so scores track the *current* policy.
+
+- **Re-score on replay.** Every replayed level should have its regret recomputed (cheap with the oracle) and its staleness reset, so a level the agent has now solved falls in priority and stops dominating.
+
+- **Keep explore steps frequent enough** (`p`≈0.5) that fresh high-regret levels keep flowing in — otherwise the buffer goes stale as a whole and the policy overfits a frozen set.
+
+- **PPO-specific:** the existing loop does `num_epochs` passes over each batch. With a less diverse buffer, cranking epochs up risks over-optimizing on repeated levels — keeping `num_epochs=1` (as `run.py` does) is the safer default. Watch `actor-kl1`/`actor-clip` for runaway updates.
+
+So: no change to *batch size* or PPO mechanics, but the curation hyperparameters (`ρ`, `p`, re-scoring) are what keep the small unique-level pool from causing overfitting.
+
+## The regret threshold — I didn't, really
+
+To be straight with you: the `regret > 0.05` figure I used earlier was a **descriptive diagnostic, not a tuned design parameter.** I picked 0.05 just to report "what fraction of fresh levels are non-trivial" — it's roughly the noise floor separating "agent essentially achieved optimal" (regret ≈ 0.01, single-step discount slack) from "agent genuinely failed" (regret ≈ 1.9 on the urn-wall levels). It was eyeballed from that bimodal spread, not derived.
+
+More importantly, **PLR⊥ as designed doesn't use an admission threshold at all.** Admission is *relative*, not absolute: the buffer keeps the **top-K by score** and evicts the lowest — so "what gets in" is decided by ranking against the current buffer, not by clearing a fixed 0.05 bar. Likewise sampling is **rank-based** (`(1/rank)^(1/β)`), which only cares about ordering, not magnitudes. That's deliberate: regret magnitudes drift as the policy improves, so any hard threshold would need constant retuning, whereas ranks self-calibrate.
+
+If you *did* want a threshold anywhere, the principled place is a small epsilon to avoid admitting pure-noise levels into an under-full buffer early in training — and you'd set it from the observed noise floor (that ~0.01–0.05 band), not pick it a priori. But it's optional polish, not load-bearing.

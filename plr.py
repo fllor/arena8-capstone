@@ -180,6 +180,10 @@ def train_agent_plr(
     buffer_capacity: int | None = None,
     staleness_coeff: float = 0.1,
     prioritisation_beta: float = 0.3,
+    eval_fn: Callable[..., dict] | None = None,
+    eval_every: int = 0,
+    checkpoint_path: str | None = None,
+    checkpoint_every: int = 0,
     wandb_project: str | None = None,
     wandb_run_name: str | None = None,
 ) -> tuple[ActorCriticNetwork, list[dict[str, float]], PLRBuffer]:
@@ -257,6 +261,15 @@ def train_agent_plr(
     steps = tqdm(range(num_train_steps)) if progress else range(num_train_steps)
     try:
         for step in steps:
+            # periodic held-out eval + checkpoint (placed before the branch so it
+            # runs every step regardless of explore/replay; eval_fn is read-only).
+            if eval_fn is not None and eval_every and step % eval_every == 0:
+                eval_metrics = eval_fn(net, step)
+                if wandb_run is not None and eval_metrics:
+                    wandb_run.log(eval_metrics, step=step)
+            if checkpoint_path and checkpoint_every and step > 0 and step % checkpoint_every == 0:
+                torch.save(net.state_dict(), checkpoint_path)
+
             coin = torch.rand(1, generator=decision_gen).item()
             replay = len(buffer) > 0 and coin < replay_prob
 

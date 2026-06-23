@@ -15,7 +15,7 @@ by *oracle regret* and, each step, takes one of two branches:
 Only replay steps move the policy -- that is what makes the buffer (a
 regret-maximising adversary) the thing the student is trained against, so at
 equilibrium the policy is minimax-regret (Jiang et al. 2021a). The oracle optimum
-in the regret is exact (`solver.compute_optimal_return_grouped`) and cached per
+in the regret is exact (`solver.compute_optimal_return`) and cached per
 level, so the expensive solve runs only on generate steps, never on replay.
 
 The `gen` seam, network, reward function, PPO step, and oracle solver are all
@@ -24,6 +24,7 @@ reused unchanged from the DR path; only the loop differs.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 import torch
@@ -35,7 +36,7 @@ from level_sampler import LevelSampler
 from potteryshop import Environment, Item
 from ppo import ppo_train_step_multienv
 from rewards import DISCOUNT_RATE
-from solver import compute_optimal_return_grouped
+from solver import compute_optimal_return
 from train import default_device
 
 
@@ -56,33 +57,46 @@ def _buffer_stats(sampler: LevelSampler) -> dict[str, float]:
     }
 
 
-def train_agent_plr(
-    gen: Callable[..., Environment],
-    net: ActorCriticNetwork,
-    reward_fn: RewardFunction,
-    num_train_steps: int = 4096,
-    num_envs: int = 256,
-    num_env_steps: int = 64,
-    num_epochs: int = 1,
-    minibatch_size: int = 512,
-    discount_rate: float = DISCOUNT_RATE,
-    entropy_coeff: float = 0.01,
-    lr: float = 0.003,
-    device: torch.device | str | None = None,
-    seed: int = 1,
-    progress: bool = True,
+@dataclass
+class PLRConfig:
+    """All arguments for `train_agent_plr`, with sensible defaults.
+
+    `gen`, `net`, and `reward_fn` are required (they have no meaningful default);
+    everything else is a PPO, PLR-buffer, or logging hyperparameter. The PPO
+    defaults are tuned for PLR (see `train_agent_plr`'s docstring). Build one and
+    hand it to `train_agent_plr(config)`.
+    """
+
+    gen: Callable[..., Environment]
+    net: ActorCriticNetwork
+    reward_fn: RewardFunction
+    num_train_steps: int = 4096
+    num_envs: int = 256
+    num_env_steps: int = 64
+    num_epochs: int = 1
+    minibatch_size: int = 512
+    discount_rate: float = DISCOUNT_RATE
+    entropy_coeff: float = 0.01
+    lr: float = 0.003
+    device: torch.device | str | None = None
+    seed: int = 1
+    progress: bool = True
     # --- PLR knobs ---
-    buffer_capacity: int = 4096,
-    replay_prob: float = 0.5,
-    staleness_coeff: float = 0.1,
-    temperature: float = 0.1,
-    minimum_fill_ratio: float = 0.5,
-    duplicate_check: bool = True,
-    log_every: int = 1,
-    eval_fn: Callable[[ActorCriticNetwork, int], dict[str, float]] | None = None,
-    eval_every: int = 0,
-    wandb_project: str | None = None,
-    wandb_run_name: str | None = None,
+    buffer_capacity: int = 4096
+    replay_prob: float = 0.5
+    staleness_coeff: float = 0.1
+    temperature: float = 0.1
+    minimum_fill_ratio: float = 0.5
+    duplicate_check: bool = True
+    log_every: int = 1
+    eval_fn: Callable[[ActorCriticNetwork, int], dict[str, float]] | None = None
+    eval_every: int = 0
+    wandb_project: str | None = None
+    wandb_run_name: str | None = None
+
+
+def train_agent_plr(
+    config: PLRConfig,
 ) -> tuple[ActorCriticNetwork, list[dict[str, float]], LevelSampler]:
     """
     Train `net` in place with robust PLR. Returns `(net, history, sampler)`; the
@@ -106,6 +120,32 @@ def train_agent_plr(
     (buffer levels, which should run high). PPO `log_every`-th steps record a
     metric dict tagged with the true `step` index and the branch taken.
     """
+    gen = config.gen
+    net = config.net
+    reward_fn = config.reward_fn
+    num_train_steps = config.num_train_steps
+    num_envs = config.num_envs
+    num_env_steps = config.num_env_steps
+    num_epochs = config.num_epochs
+    minibatch_size = config.minibatch_size
+    discount_rate = config.discount_rate
+    entropy_coeff = config.entropy_coeff
+    lr = config.lr
+    device = config.device
+    seed = config.seed
+    progress = config.progress
+    buffer_capacity = config.buffer_capacity
+    replay_prob = config.replay_prob
+    staleness_coeff = config.staleness_coeff
+    temperature = config.temperature
+    minimum_fill_ratio = config.minimum_fill_ratio
+    duplicate_check = config.duplicate_check
+    log_every = config.log_every
+    eval_fn = config.eval_fn
+    eval_every = config.eval_every
+    wandb_project = config.wandb_project
+    wandb_run_name = config.wandb_run_name
+
     device = torch.device(device) if device is not None else default_device()
     net = net.to(device)
     gen_device = device if device.type == "cuda" else torch.device("cpu")
@@ -181,7 +221,7 @@ def train_agent_plr(
                 # --- generate: score only, no gradient update (stop-gradient) ---
                 envs = gen(num_envs=num_envs, generator=generator).to(device)
                 metrics, returns = _ppo(envs, update=False)
-                optimal = compute_optimal_return_grouped(
+                optimal = compute_optimal_return(
                     envs, discount_rate=discount_rate, horizon=num_env_steps
                 )
                 regret = optimal - returns.cpu()

@@ -21,7 +21,7 @@ from agent import ActorCriticNetwork
 from evaluation import compute_return
 from potteryshop import Environment, collect_rollout, tree_map
 from rewards import DISCOUNT_RATE, reward2
-from solver import compute_optimal_return_grouped
+from solver import compute_optimal_return
 
 # Hand-built 4x4 urn-wall deployment levels (bin and robot in the top-left
 # corner, an urn wall between them and the open floor). These are the
@@ -79,9 +79,9 @@ def make_eval_fn(
     device = torch.device(device)
     rng = torch.Generator().manual_seed(seed)
     rand = gen(num_envs=n_random, generator=rng)
-    rand_opt = compute_optimal_return_grouped(rand, horizon=horizon)
+    rand_opt = compute_optimal_return(rand, horizon=horizon)
     walls = build_walls() if walls is None else walls
-    wall_opt = compute_optimal_return_grouped(walls, horizon=horizon)
+    wall_opt = compute_optimal_return(walls, horizon=horizon)
 
     def _regret(net: ActorCriticNetwork, envs: Environment, optimal: torch.Tensor):
         roll = collect_rollout(

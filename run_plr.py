@@ -22,7 +22,7 @@ import visualise
 from agent import ActorCriticNetwork
 from evalsuite import build_walls, make_eval_fn
 from generate import generate
-from plr import train_agent_plr
+from plr import PLRConfig, train_agent_plr
 from potteryshop import Action, Item
 from rewards import reward2
 from train import default_device
@@ -69,12 +69,12 @@ net = ActorCriticNetwork.init(
 
 eval_fn = make_eval_fn(gen, device)
 
-net, history, sampler = train_agent_plr(
+config = PLRConfig(
     gen=gen,
     net=net,
     reward_fn=reward2,
     num_train_steps=600,  # ~5 min on an A40
-    num_envs=256,
+    num_envs=256*8,
     replay_prob=0.5,
     buffer_capacity=4096,
     device=device,
@@ -84,6 +84,8 @@ net, history, sampler = train_agent_plr(
     log_every=10,
     wandb_project=WANDB_PROJECT,
 )
+
+net, history, sampler = train_agent_plr(config)
 
 # %%
 # Plot training-side regret (split by branch) and the buffer composition over
@@ -144,4 +146,11 @@ print("top buffer regret scores:", sampler.scores[top].tolist())
 print("their urn counts:", urns.tolist())
 visualise.display_envs(top_levels, grid_width=4, title="highest-regret buffer levels")
 
+# %% Visualise grid of rollouts
+grid_width = 6
+watch_envs = gen(num_envs=grid_width**2, generator=torch.Generator().manual_seed(3))
+regrets = rollout_regret_grid(net, watch_envs, grid_width=grid_width, device=device)
+# %% Test walking around wall
+walls = wall_envs(world_size)
+wall_regrets = rollout_regret_grid(net, walls, device=device)
 # %%

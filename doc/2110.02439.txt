@@ -1,0 +1,2652 @@
+arXiv:2110.02439v2 [cs.LG] 13 Jan 2022
+
+Replay-Guided Adversarial Environment Design
+
+Minqi Jiang∗
+UCL, FAIR
+
+Michael Dennis∗
+UC Berkeley
+
+Jakob Foerster
+FAIR
+
+Edward Grefenstette
+UCL, FAIR
+
+Jack Parker-Holder
+University of Oxford
+Tim Rocktäschel
+UCL, FAIR
+
+Abstract
+Deep reinforcement learning (RL) agents may successfully generalize to new
+settings if trained on an appropriately diverse set of environment and task
+configurations. Unsupervised Environment Design (UED) is a promising selfsupervised RL paradigm, wherein the free parameters of an underspecified
+environment are automatically adapted during training to the agent’s capabilities,
+leading to the emergence of diverse training environments. Here, we cast Prioritized
+Level Replay (PLR), an empirically successful but theoretically unmotivated
+method that selectively samples randomly-generated training levels, as UED. We
+argue that by curating completely random levels, PLR, too, can generate novel and
+complex levels for effective training. This insight reveals a natural class of UED
+methods we call Dual Curriculum Design (DCD). Crucially, DCD includes both
+PLR and a popular UED algorithm, PAIRED, as special cases and inherits similar
+theoretical guarantees. This connection allows us to develop novel theory for PLR,
+providing a version with a robustness guarantee at Nash equilibria. Furthermore,
+our theory suggests a highly counterintuitive improvement to PLR: by stopping
+the agent from updating its policy on uncurated levels (training on less data), we
+can improve the convergence to Nash equilibria. Indeed, our experiments confirm
+that our new method, PLR⊥ , obtains better results on a suite of out-of-distribution,
+zero-shot transfer tasks, in addition to demonstrating that PLR⊥ improves the
+performance of PAIRED, from which it inherited its theoretical framework.
+
+1
+
+Introduction
+
+While deep reinforcement learning (RL) approaches have led to many successful applications in
+challenging domains like Atari [21], Go [35], Chess [36], Dota [4], and StarCraft [40] in recent years,
+deep RL agents still prove to be brittle, often failing to transfer to environments only slightly different
+from those encountered during training [44, 9]. To ensure learning of robust and well-generalizing
+policies, agents must train on sufficiently diverse and informative variations of environments (e.g. see
+Section 3.1 of [8]). However, it is not always feasible to specify an appropriate training distribution or
+a generator thereof. Agents may therefore benefit greatly from methods that automatically adapt the
+distribution over environment variations throughout training [10, 17]. Throughout this paper we will
+call a particular environment instance or configuration (e.g. an arrangement of blocks, race tracks, or
+generally any of the environment’s constituent entities) a level.
+Two recent works [10, 17] have sought to empirically demonstrate this need for a more targeted agentadaptive mechanism for selecting levels on which to train RL agents, so to ensure efficient learning
+and generalization to unseen levels—as well as to provide methods implementing such mechanisms.
+The first method, Protagonist Antagonist Induced Regret Environment Design (PAIRED) [10],
+∗
+
+Equal contribution. Correspondence to msj@fb.com and michael_dennis@berkeley.edu .
+
+35th Conference on Neural Information Processing Systems (NeurIPS 2021), Sydney, Australia.
+
+(a) DR
+
+(b) PAIRED
+
+(c) REPAIRED
+
+(d) PLR⊥
+
+(e) Human
+
+Figure 1: Randomly drawn samples of CarRacing tracks produced by different methods. (a) Domain
+Randomization (DR) produces tracks of average complexity, with few sharp turns. (b) PAIRED often
+overexploits the difference in the students, leading to simple tracks that incidentally favor the antagonist.
+(c) REPAIRED mitigates this degeneracy, recovering track complexity. (d) PLR⊥ selects the most challenging
+randomly generated tracks, resulting in tracks that more closely resemble human-designed tracks, such as
+(e) the Nürburgring Grand Prix.
+
+introduces a self-supervised RL paradigm called Unsupervised Environment Design (UED). Here, an
+environment generator (a teacher) is co-evolved with a student policy that trains on levels actively
+proposed by the teacher, leading to a form of adaptive curriculum learning. The aim of this coevolution
+is for the teacher to gradually learn to generate environments that exemplify properties of those that
+might be encountered at deployment time, and for the student to simultaneously learn a good policy
+that enables zero-shot transfer to such environments. PAIRED’s specific adversarial approach to
+environment design ensures a useful robustness characterization of the final student policy in the form
+of a minimax regret guarantee [31]—assuming that its underlying teacher-student multi-agent system
+arrives at a Nash equilibrium [NE, 24]. In contrast, the second method, Prioritized Level Replay
+(PLR) [17], embodies an alternative form of dynamic curriculum learning that does not assume
+control of level generation, but instead, the ability to selectively replay existing levels. PLR tracks
+levels previously proposed by a black-box environment generator, and for each, estimates the agent’s
+learning potential in that level, in terms of how useful it would be to gather new experience from that
+level again in the future. The PLR algorithm exploits these scores to adapt a schedule for revisiting or
+replaying levels to maximize learning potential. PLR has been shown to produce scalable and robust
+results, improving both sample complexity of agent training and the generalization of the learned
+policy in diverse environments. However, unlike PAIRED, PLR is motivated with heuristic arguments
+and lacks a useful theoretical characterization of its learning behavior.
+In this paper, we argue that PLR is, in and of itself, an effective form of UED: Through curating even
+randomly generated levels, PLR can generate novel and complex levels for learning robust policies.
+This insight leads to a natural class of UED methods which we call Dual Curriculum Design (DCD).
+In DCD, a student policy is challenged by a team of two co-evolving teachers. One teacher actively
+generates new, challenging levels, while the other passively curates existing levels for replaying, by
+prioritizing those estimated to be most suitably challenging for the student. We show that PAIRED
+and PLR are distinct members of the DCD class of algorithms and prove in Section 3 that all DCD
+algorithms enjoy similar minimax regret guarantees to that of PAIRED.
+We make use of this result to provide the first theoretical characterization of PLR, which immediately
+suggests a simple yet highly counterintuitive adjustment to PLR: By only training on trajectories in
+replay levels, PLR becomes provably robust at NE. We call this resulting variant PLR⊥ (Section 4).
+From this perspective, PLR effectively performs level design in a diametrically opposite manner
+to PAIRED—through prioritized selection rather than active generation. A second corollary to
+the provable robustness of DCD algorithms shows that PLR⊥ can be extended to make use of the
+PAIRED teacher as a level generator while preserving the robustness guarantee of PAIRED, resulting
+in a method we call Replay-Enhanced PAIRED (REPAIRED) (Section 5). We hypothesize that in this
+arrangement, PLR⊥ plays a complementary role to PAIRED in robustifying student policies.
+Our experiments in Section 6 investigate the learning dynamics of PLR⊥ , REPAIRED, and their
+replay-free counterparts on a challenging maze domain and a novel continuous control UED setting
+based on the popular CarRacing environment [5]. In both of these highly distinct settings, our
+methods provide significant improvements over PLR and PAIRED, producing agents that can perform
+out-of-distribution (OOD) generalization to a variety of human designed mazes and Formula 1 tracks.
+In summary, we present the following contributions: (i) We establish a common framework, Dual
+Curriculum Design, that encompasses PLR and PAIRED. This allows us to develop new theory,
+which provides the first robustness guarantees for PLR at NE as well as for REPAIRED, which
+2
+
+augments PAIRED with a PLR-based replay mechanism. (ii) Crucially, our theory suggests a highly
+counterintuitive improvement to PLR: the convergence to NE should be assisted by training on less
+data when using PLR—namely by only taking gradient updates from data that originates from the
+PLR buffer, using the samples from the environment distribution only for computing the prioritization
+of levels in the buffer. (iii) Our experiments in a maze domain and a novel car-racing domain show
+that our methods significantly outperform their replay-free counterparts in zero-shot generalization.
+We open source our methods at https://github.com/facebookresearch/dcd.
+
+2
+
+Background
+
+2.1
+
+Unsupervised Environment Design
+
+Unsupervised Environment Design (UED), as introduced by [10], is the problem of automatically
+designing a distribution of environments that adapts to the learning agent. UED is defined in terms of
+an Underspecified POMDP (UPOMDP), given by M = hA, O, Θ, S M , T M , I M , RM , γi, where
+A is a set of actions, O is a set of observations, S is a set of states, T : S × A × Θ → ∆(S) is a
+transition function, I : S → O is an observation (or inspection) function, R : S → R is a reward
+function, and γ is a discount factor. This definition is identical to a POMDP with the addition of Θ
+to represent the free-parameters of the environment. These parameters can be distinct at every time
+step and incorporated into the transition function T M : S × A × Θ → ∆(S). For example, Θ could
+represent the possible positions of obstacles in a maze. We will refer to the environment resulting
+from a fixed θ ∈ Θ as Mθ , or with a slight abuse of notation, simply θ when clear from context. We
+PT
+define the value of π in Mθ to be V θ (π) = E[ i=0 rt γ t ] where rt are the rewards attained by π in
+Mθ . Aligning with terminology from [17], we refer to a fully-specified environment as a level.
+2.2
+
+Protagonist Antagonist Induced Regret Environment Design
+
+Protagonist Antagonist Induced Regret Environment Design [PAIRED, 10] presents a UED approach
+consisting of simultaneously training agents in a three player game: the protagonist πA and
+the antagonist πB are trained in environments generated by the teacher θ̃. The objective of
+this game is defined by U (πA , πB , θ̃) = Eθ∼θ̃ [R EGRETθ (πA , πB )], where regret is defined by
+R EGRETθ (πA , πB ) = V θ (πB ) − V θ (πA ). The protagonist and antagonist are both trained to
+maximize their discounted environment returns while the teacher is trained to maximize U . Note that
+by maximizing regret, the teacher is disincentivized from generating unsolvable levels, which will
+have a maximum regret of 0. As shorthand, we will sometimes refer to the protagonist and antagonist
+jointly as the student agents. The counterclockwise loop beginning at the student agents in Figure 2
+summarizes this approach, with the students being both the protagonist and antagonist.
+As both student agents grow more adept at solving different levels, the teacher continues to adapt
+its level designs to exploit the weaknesses of the protagonist in relation to the antagonist. As this
+dynamic unfolds, PAIRED produces an emergent curriculum of progressively more complex levels
+along the boundary of the protagonist’s capabilities. PAIRED is a creative method in the sense that
+the teacher may potentially generate an endless sequence of novel levels. However, as the teacher
+only adapts through gradient updates, it is inherently slow to adapt to changes in the student policies.
+2.3
+
+Prioritized Level Replay
+
+Prioritized Level Replay [PLR, 17] is an active-learning strategy shown to improve a policy’s sample
+efficiency and generalization to unseen levels when training and evaluating on levels from a common
+UPOMDP, typically implemented as a seeded simulator. PLR maintains a level buffer Λ of the top
+K visited levels with highest learning potential as estimated by the time-averaged L1 value loss of
+the learning agent over the last episode on each level. At the start of each training episode, with
+some predefined replay probability p, PLR uses a bandit to sample the level from Λ to maximize the
+estimated learning potential; otherwise, with probability 1 − p, PLR samples a new level from the
+simulator. In contrast to the generative but slow-adapting PAIRED, PLR does not create new levels,
+but instead, acts as a fast-adapting curation mechanism for selecting the next training level among
+previously encountered levels. Also unlike PAIRED, PLR does not provide a robustness guarantee.
+By extending the theoretical foundation of PAIRED to PLR, we will show how PLR can be modified
+3
+
+to provide a robustness guarantee at NE, as well as how PAIRED can exploit PLR’s complementary
+curation to quickly switch among generated levels to maximize the student’s regret.
+
+3
+
+The Robustness of Dual Curriculum Design
+Train
+on generated level
+
+Curator
+
+Generate new level
+
+Generator
+
+Select a replay level
+Update with level
+
+Update with regret
+Student
+
+Figure 2: Overview of Dual Curriculum Design (DCD). The student learns in the presence of two co-adapting
+teachers that aim to maximize the student’s regret: The generator teacher designs new levels to challenge the
+agent, and the curator teacher prioritizes a set of levels already created, selectively sampling them for replay.
+
+The previous approaches of PAIRED and PLR reveal a natural duality: Approaches that gradually
+learn to generate levels like PAIRED, and methods which cannot generate levels, but instead, quickly
+curate existing ones, like PLR. This duality suggests combining slow level generators with fast level
+curators. We call this novel class of UED algorithms Dual Curriculum Design (DCD). For instance,
+PLR can be seen as curator with a prioritized sampling mechanism with a random generator, while
+PAIRED, as a regret-maximizing generator without a curator. DCD can further consider Domain
+Randomization (DR) as a degenerate case of a random level generator without a curator.
+To theoretically analyze this space of methods, we model DCD as a three player game among a
+student agent and two teachers called the dual curriculum game. However, to formalize this game,
+we must first formalize the single-teacher setting: Suppose the UPOMDP is clear from context. Then,
+given a utility function for a single teacher, Ut (π, θ), we can naturally define the base game between
+the student s and teacher t as G = hS = Ss × St , U = Us × Ut i, where Ss = Π is the strategy set
+of the student, St = Θ is the strategy set of the teacher, and Us (π, θ) = V θ (π) is the utility function
+of the student. In Sections 4 and 5, we will study settings corresponding to different choices of utility
+functions for the teacher agents, namely the maximum-regret objective UtR (π, θ) and the uniform
+objective UtU (π, θ). These two objectives are defined as follows (for any constant C):
+UtR (π, θ) = argmax{V θ (π ∗ ) − V θ (π)}
+π ∗ ∈Π
+UtU (π, θ) = C
+
+(1)
+(2)
+
+In the dual curriculum game G, the first teacher plays the game with probability p, and the second,
+1
+2
+with probability (1 − p)—or more formally, G = hS = Ss × St × St , U = U s × U t × U t i, where
+1
+2
+the utility functions for the student and two teachers respectively, U s , U t , U t , are defined as follows:
+1
+
+U t (π, θ1 , θ2 ) = pUt1 (π, θ1 )
+2
+U t (π, θ1 , θ2 ) = (1 − p)Ut2 (π, θ2 )
+U s (π, θ1 , θ2 ) = pUs (π, θ1 ) + (1 − p)Us (π, θ2 )
+
+(3)
+(4)
+(5)
+
+Our main theorem is that NE in the dual curriculum game are approximate NE of both the base game
+for either of the original teachers and the base game with a teacher maximizing the joint-reward of
+pUt1 + (1 − p)Ut2 , where the quality of the approximations depends on the mixing probability p.
+Theorem 1. Let B be the maximum difference between Ut1 and Ut2 , and let (π, θ1 , θ2 ) be a NE for
+G. Then (π, pθ1 + (1 − p)θ2 ) is an approximate NE for the base game with either teacher or for a
+teacher optimizing their joint objective. More precisely, it is a 2Bp(1 − p)-approximate NE when
+Ut = pUt1 + (1 − p)Ut2 , a 2B(1 − p)-approximate NE when Ut = Ut1 , and a 2Bp-approximate NE
+when Ut = Ut2 .
+The intuition behind this theorem is that, since the two teachers do not affect each other’s behavior,
+their best response to a fixed πs is to choose a strategy θ that maximizes Ut1 and Ut2 respectively.
+4
+
+Moreover, the two teachers’ strategies can be viewed as a single combined strategy for the base
+game with the joint-objective, or with each teacher’s own objective. In fact, the teachers provide
+an approximate best-response to each case of the base game simply by playing their individual best
+responses. Thus, when we reach a NE of the dual curriculum game, the teachers arrive at approximate
+best responses for both the base game with the joint objective and with their own objectives, meaning
+they are also in an approximate NE of the base game with either teacher. The full details of this proof
+are outlined in Appendix A.
+
+4
+
+Robustifying PLR
+
+In this section, we provide theoretical justification for the empirically observed effectiveness of PLR,
+and in the process, motivate a counterintuitive adjustment to the algorithm.
+Algorithm 1: Robust PLR (PLR⊥ )
+Randomly initialize policy π(φ) and an empty level buffer, Λ of size K.
+while not converged do
+Sample replay-decision Bernoulli, d ∼ PD (d)
+if d = 0 then
+Sample level θ from level generator
+Collect π’s trajectory τ on θ, with a stop-gradient φ⊥
+else
+Use PLR to sample a replay level from the level store, θ ∼ Λ
+Collect policy trajectory τ on θ and update π with rewards R(τ )
+end
+Compute PLR score, S = score(τ, π)
+Update Λ with θ using score S
+end
+
+4.1
+
+i.e. Suppress policy update
+
+Achieving Robustness Guarantees with PLR
+
+PLR provides strong empirical gains in generalization, but lacks any theoretical guarantees of
+robustness. One step towards achieving such a guarantee is to replace its L1 value-loss prioritizaton
+with a regret prioritization, using the methods we discuss in Section 4.2: While L1 value loss may
+be good for quickly training the value function, it can bias the long-term training behavior toward
+high-variance policies. However, even with this change, PLR holds weaker theoretical guarantees
+because the random generating teacher can bias the student away from minimax regret policies and
+instead, toward policies that sacrifice robustness in order to excel in unstructured levels. We formalize
+this intuitive argument in the following corollary of Theorem 1.
+Corollary 1. Let G be the dual curriculum game in which the first teacher maximizes regret,
+so Ut1 = UtR , and the second teacher plays randomly, so Ut2 = UtU . Let V θ (π) be
+bounded in [B − , B + ] for all θ, π. Further, suppose that (π, θ1 , θ2 ) is a Nash equilibrium
+of G. Let R∗ = minπA ∈Π {maxθ,πB ∈Θ,Π {R EGRETθ (πA , πB )}} be the optimal worst-case
+regret. Then π is 2(B + − B − )(1 − p) close to having optimal worst-case regret, or formally,
+maxθ,πB ∈Θ,Π {R EGRETθ (πA , π)} ≥ R∗ − 2(B + − B − )(1 − p). Moreover, there exists environments
+for all values of p within a constant factor of achieving this bound.
+The proof of Corollary 1 follows from a direct application of Theorem 1 to show that a NE of G is an
+approximate NE for the base game of the first teacher, and through constructing a simple example
+where the student’s best response in G fails to attain the minimax regret in G. These arguments are
+described in full in Appendix A. This corollary provides some justification for why PLR improves
+robustness of the equilibrium policy, as it biases the resulting policy toward a minimax regret policy.
+However, it also points a way towards further improving PLR: If the probability p of using a teachergenerated level directly was set to 0, then in equilibrium, the resulting policy converges to a minimax
+regret policy. Consequently, we arrive at the counterintuitive idea of avoiding gradient updates from
+trajectories collected from randomly sampled levels, to ensure that at NE, we find a minimax regret
+policy. From a robustness standpoint, it is therefore optimal to train on less data. The modified PLR
+algorithm PLR⊥ with this counterintuitive adjustment is summarized in Algorithm 1, in which this
+small change relative to the original algorithm is highlighted in blue.
+5
+
+4.2
+
+Estimating Regret
+
+In general, levels may differ in maximum achievable returns, making it impossible to know the true
+regret of a level without access to an oracle. As the L1 value loss typically employed by PLR does
+not generally correspond to regret, we turn to alternative scoring functions that better approximate
+regret. Two approaches, both effective in practice, are discussed below.
+Positive Value Loss Averaging over all transitions with positive value loss amounts to estimating
+regret as the difference between maximum achieved return and predicted return on an episodic basis.
+However, this estimate is highly biased, as the value targets are tied to the agent’s current, potentially
+suboptimal policy. As it only considers positive value losses, this scoring function leads to optimistic
+sampling of levels with respect to the current policy. When using GAE [33] to estimate bootstrapped
+value targets, this loss takes the following form, where λ and γ are the GAE and MDP discount
+factors respectively, and δt , the TD-error at timestep t:
+!
+T
+T
+X
+1X
+k−t
+max
+(γλ) δk , 0 .
+T t=0
+k=t
+
+Maximum Monte Carlo (MaxMC) We can mitigate some of the bias of the positive value loss by
+replacing the value target with the highest return achieved on the given level so far during training. By
+using this maximal return, the regret estimates no longer depend on the agent’s current policy. This
+PT
+estimator takes the simple form of (1/T ) t=0 Rmax − V (st ). In our dense-reward experiments,
+we compute this score as the difference between the maximum achieved return and V (s0 ).
+
+5
+
+Replay-Enhanced PAIRED (REPAIRED)
+
+We can replace the random generator teacher used by PLR⊥ with the PAIRED teacher. This extension
+entails a second student agent, the antagonist, also equipped with its own PLR level buffer. In
+each episode, with probability p, the students evaluate their performances (but do not train) on a
+newly generated level and, with probability 1 − p, train on a level sampled from each student’s own
+regret-prioritizing PLR buffer. Training only on the highest regret levels should mitigate inefficiencies
+in the PAIRED teacher’s optimization procedure. We refer to this extension as Replay-Enhanced
+PAIRED (REPAIRED). An overview of REPAIRED is provided by black arrows in Figure 2, with the
+students being the protagonist and antagonist, while the full pseudocode is outlined in Appendix B.
+Since PLR⊥ and PAIRED both promote regret in equilibrium, it would be reasonable to believe that
+the combination of the two does the same. A straightforward corollary of Theorem 1, which we
+describe in Appendix 1, shows that, in a theoretically ideal setting, combining these two algorithms
+as is done in REPAIRED indeed finds minimax regret strategies in equilibrium.
+Corollary 2. Let G be the dual curriculum game in which both teachers maximize regret, so
+Ut1 = Ut2 = UtR . Further, suppose that (π, θ1 , θ2 ) is a Nash equilibrium of G. Then, π ∈
+argminπA ∈Π {maxθ,πB ∈Θ,Π {R EGRETθ (πA , πB )}}.
+This result gives us some amount of assurance that, if our method arrives at NE, then the protagonist
+has converged to a minimax regret strategy, which has the benefits outlined in [10]: Since a minimax
+regret policy solves all solvable environments, whenever this is possible and sufficiently well-defined,
+we should expect policies resulting from the equilibrium behavior of REPAIRED to be robust and
+versatile across all environments in the domain.
+
+6
+
+Experiments
+
+Our experiments firstly aim to (1) assess the empirical performance of the theoretically motivated
+PLR⊥ , and secondly, seek to better understand the effect of replay on unsupervised environment
+design, specifically (2) its impact on the zero-shot generalization performance of the induced student
+policies, and (3) the complexity of the levels designed by the teacher. To do so, we compare PLR
+and REPAIRED against their replay-free counterparts, DR and PAIRED, in the two highly distinct
+settings of discrete control with sparse rewards and continuous control with dense rewards. We
+provide environment descriptions alongside model and hyperparameter choices in Appendix D.
+6
+
+6.1
+
+Partially-Observable Navigation
+
+Each navigation level is a partially-observable maze requiring student agents to take discrete actions
+to reach a goal and receive a sparse reward. Our agents use PPO [34] with an LSTM-based recurrent
+policy to handle partial observability. Before each episode, the teacher designs the level in this order:
+beginning with an empty maze, it places one obstructing block per time step up to a predefined block
+budget, and finally places the agent followed by the goal.
+SixteenRooms
+
+Labyrinth
+
+Labyrinth2
+
+Maze
+
+Maze2
+
+PerfectMaze*
+
+LargeCorridor*
+
+Solved rate
+
+1.0
+
+0.5
+
+0.0
+
+DR
+
+Minimax
+
+PAIRED
+
+REPAIRED
+
+PLR
+
+PLR⊥
+
+Figure 3: Zero-shot transfer performance in challenging test environments after 250M training steps. The plots
+show median and interquartile range of solved rates over 10 runs. An asterisk (*) next to the maze name indicates
+the maze is procedurally-generated, and thus each attempt corresponds to a random configuration of the maze.
+
+Zero-Shot Generalization We train policies with each method for 250M steps and evaluate zeroshot generalization on several challenging OOD environments, in addition to levels from the full
+distribution of two procedurally-generated environments, PerfectMaze and LargeCorridor. We also
+compare against DR and minimax baselines. Our results in Figure 3 and 4 show that PLR⊥ and
+REPAIRED both achieve greater sample-efficiency and zero-shot generalization than their replay-free
+counterparts. The improved test performance achieved by PLR⊥ over both DR and PLR when trained
+for an equivalent number of gradient updates, aggregated over all test mazes, is statistically significant
+(p < 0.05), as is the improved test performance of REPAIRED over PAIRED. Well before 250
+million steps, both PLR and PLR⊥ significantly outperform PAIRED after 3 billion training steps, as
+reported in [10]. Further, both PLR variants lead to policies exhibiting greater zero-shot transfer than
+the PAIRED variants. Notably, the PLR⊥ agent learns to solve mazes via an approximate right-hand
+rule. Table 2 in Appendix C.1 reports performance across all test mazes. The success of designing
+regret-maximizing levels via random search (curation) over learning a generator with RL suggests
+that for some UPOMDPs, the regret landscape, as a function of the free parameters θ, has a low
+effective dimensionality [3]. Foregoing gradient-based learning in favor of random search may then
+lead to faster adaptation to the changing regret landscape, as the policy evolves throughout training.
+⊥
+
+DR
+PAIRED REPAIRED
+PLR
+PLR
+Emergent Complexity As the student agents improve,
+the teachers must generate more challenging levels to
+maintain regret. We measure the resultant emergent
+complexity by tracking the number of blocks in each
+level and the shortest path length to the goal (where
+unsolvable levels are assigned a length of 0). These results,
+summarized in Figure 4, show that PAIRED slowly adapts
+the complexity over training while REPAIRED initially Figure 5: Examples of emergent
+quickly grows complexity, before being overtaken by structures generated by each method.
+PAIRED. This more rapid onset of complexity may be
+due to REPAIRED’s fast replay mechanism, and the long-term slowdown relative to PAIRED may
+be explained by its less frequent gradient updates. Our results over an extended training period
+in Appendix C confirm that both PAIRED and REPAIRED slowly increase complexity over time,
+eventually matching that attained in just a fraction of the number of gradient steps by PLR and PLR⊥ .
+This result shows that random search is surprisingly efficient at continually discovering levels of
+increasing complexity, given an appropriate curation mechanism such as PLR. Figure 5 shows that,
+similar to methods with a regret-maximizing teacher, PLR finds levels exhibiting complex structure.
+
+7
+
+DR
+
+Minimax
+
+SixteenRooms
+
+PAIRED
+
+REPAIRED
+
+Labyrinth
+
+1
+
+Labyrinth
+
+SixteenRooms
+
+Maze
+1
+
+1
+
+PLR⊥
+
+PLR
+
+0.8
+
+Solved rate
+
+PAIRED, 3B steps
+Median
+
+0.1
+
+0.5
+0.2
+0.0
+
+Solved rate
+
+0.0
+0
+
+0
+
+5K
+
+Number of blocks
+
+5K
+
+Shortest path length
+
+Block count
+
+12
+
+0
+
+0
+0
+
+250M
+
+20
+10
+8
+
+10
+
+6
+
+0
+0
+
+250M
+
+0
+
+250M
+
+0
+
+5K
+
+Steps
+
+0
+
+5K
+
+PPO updates
+
+Figure 4: Zero-shot transfer performance during training for PAIRED and REPAIRED variants. The plots
+show mean and standard error across 10 runs. The dotted lines mark the mean performance of PAIRED after 3B
+training steps, as reported in [10], while dashed lines indicate median returns.
+
+6.2
+
+Pixel-Based Car Racing with Continuous Control
+
+To test the versatility and scalability of our methods, we turn to an extended version of the CarRacing
+environment from OpenAI Gym [5]. This environment entails continuous control with dense rewards,
+a 3-dimensional action space, and partial, pixel observations, with the goal of driving a full lap
+around a track. To enable UED of any closed-loop track, we reparameterize CarRacing to generate
+tracks as Bézier curves [22] with arbitrary control points. The teacher generates levels by choosing a
+sequence of up to 12 control points, which uniquely defines a Bézier track within specific, predefined
+curvature constraints. After 5M steps of training, we test the zero-shot transfer performance of
+policies trained by each method on 20 levels replicating official human-designed Formula One (F1)
+tracks (see Figure 19 in the Appendix for a visualization of the tracks). Note that these tracks are
+significantly OOD, as they cannot be defined with just 12 control points. In Figure 6 we show
+the progression of zero-shot transfer performance for the original CarRacing environment, as well
+as three F1 tracks of varying difficulty, while also including the final performance on the full F1
+benchmark. For the final performance, we also evaluated the state-of-the-art CarRacing agent from
+[38] on our new F1 benchmark.
+PAIRED
+
+CarRacing-v0
+
+Test return
+
+900
+
+F1-Italy
+900
+
+450
+
+REPAIRED
+
+0
+
+F1-Singapore
+900
+
+450
+
+5M
+
+0
+
+5M
+
+0
+
+Tang et al, 2020
+Full F1
+
+F1-Germany
+900
+
+450
+
+0
+0
+
+PLR⊥
+
+PLR
+
+Test return
+
+DR
+
+450
+
+200
+
+0
+
+0
+5M
+
+0
+
+400
+
+0
+
+5M
+
+Steps
+
+Figure 6: Zero-shot transfer performance. Plots show mean and standard error over 10 runs.
+Unlike in the sparse, discrete navigation setting, we find DR leads to moderately successful policies
+for zero-shot transfer in CarRacing. Dense rewards simplify the learning problem and random Bezier
+tracks occasionally contain the challenges seen in F1 tracks, such as hairpin turns and observations
+showing parallel tracks due to high local curvature. Still, we see that policies trained by selectively
+sampling tracks to maximize regret significantly outperform those trained by uniformly sampling
+8
+
+from randomly generated tracks, in terms of zero-shot transfer to the OOD F1 tracks. Remarkably,
+with a replay rate of 0.5, PLR⊥ sees statistically significant (p < 0.001) gains over PLR in zero-shot
+performance over the full F1 benchmark, despite directly training on only half the rollout data using
+half as many gradient updates. Once again, we see that random search with curation via PLR produces
+a rich selection of levels and an effective curriculum.
+We also observe that PAIRED struggles to train a robust protagonist in CarRacing. Specifically,
+PAIRED overexploits the relative strengths of the antagonist over the protagonist, finding curricula that
+steer the protagonist towards policies that ultimately perform poorly even on simple tracks, leading to a
+gradual reduction in level complexity. We present training curves revealing this dynamic in Appendix
+C. As shown in Figure 6, REPAIRED mitigates this degeneracy substantially, though not completely,
+inducing a policy that significantly outperforms PAIRED (p < 0.001) in mean performance on the full
+F1 benchmark, but underperforms DR. Notably, PLR⊥ exceeds the performance of the state-of-the-art
+AttentionAgent [38], despite not using a self-attention policy and training on less than 0.25% of the
+number of environment steps in comparison. These gains come purely from the induced curriculum.
+Figure 17 in Appendix C further reveals that PLR⊥ produces CarRacing policies that tend to achieve
+higher minimum returns on average compared to the baseline methods, providing further evidence of
+the benefits of the minimax regret property coupled with a fast replay-based mechanism for efficiently
+finding high-regret levels.
+
+7
+
+Related Work
+
+In inducing parallel curricula, DCD follows a rich lineage of curriculum learning methods [2, 32, 28,
+23]. Many previous curriculum learning algorithms resemble the curator in DCD, sharing similar
+underlying selective-sampling mechanisms as PLR⊥ . Most similar is TSCL [19], which prioritizes
+levels based on return rather than value loss, and has been shown to overfit to training levels in some
+settings [17]. In our setting, replayed levels can be viewed as past strategies from a level-generating
+teacher. This links our replay-based methods to fictitious self-play [FSP, 13], and more closely,
+Prioritized FSP [40], which selectively samples opponents based on historic win ratios.
+Recent approaches that make use of a generating adversary include Asymmetric Self-Play [37, 26],
+wherein one agent proposes tasks for another in the form of environment trajectories, and AMIGo [6],
+wherein the teacher is rewarded for proposing reachable goals. While our methods do not presuppose
+a goal-based setting, others have made progress here using generative modeling [12, 29], latent skill
+learning [14], and exploiting model disagreement [45]. These methods are less generally applicable
+than PLR⊥ , and unlike our DCD methods, they do not provide well-principled robustness guarantees.
+Other recent algorithms can be understood as forms of UED and like DCD, framed in the lens of
+decision theory. POET [41, 42], a coevolutionary approach [27], uses a population of minimax
+(rather than minimax regret) adversaries to construct terrain for a BipedalWalker agent. In contrast
+to our methods, POET requires training a large population of both agents and environments and
+consequently, a sizable compute overhead. APT-Gen [11] also procedurally generates tasks, but
+requires access to target tasks, whereas our methods seek to improve zero-shot transfer.
+The DCD framework also encompasses adaptive domain randomization methods [DR, 20, 15], which
+have seen success in assisting sim2real transfer for robotics [39, 16, 1, 25]. DR itself is subsumed by
+procedural content generation [30], for which UED and DCD may be seen as providing a formal,
+decision-theoretic framework, enabling development of provably optimal algorithms.
+
+8
+
+Discussion
+
+We established a novel connection between PLR and minimax regret UED approaches like PAIRED,
+by developing the theory of Dual Curriculum Design (DCD). In this setting, a student policy is
+challenged by a team of two co-adapting, regret-maximizing teachers: one, a generator that creates
+new levels, and the other, a curator that selectively samples previously generated levels for replay.
+This view unifies PLR and PAIRED, which are both instances of DCD. Our theoretical results on DCD
+then enabled us to prove that PLR attains a minimax regret policy at NE, thereby providing the first
+theoretical characterization of the robustness of PLR. Notably our theory leads to the counterintuitive
+result that PLR can be made provably robust by training on less data, specifically, by only using
+9
+
+the trajectories on levels sampled for replay. In addition, we developed Replay-Enhanced PAIRED
+(REPAIRED), which extends the selective replay-based updates of PLR⊥ to PAIRED, and proved
+it shares the same robustness guarantee at NE. Empirically, in two highly distinct environments,
+we found that PLR⊥ significantly improves zero-shot generalization over PLR, and REPAIRED,
+over PAIRED. As our methods solely modify the order of levels visited during training, they can, in
+principle, be combined with many other RL methods to yield potentially orthogonal improvements in
+sample-efficiency and generalization.
+While these DCD-based improvements to PLR and PAIRED empirically lead to more robust policies,
+it is important to emphasize that our theoretical results only prove a minimax regret guarantee at
+NE for these methods; however, they provide no explicit guarantee of convergence to such NE.
+Further, it is worth highlighting that replay-based methods like PLR⊥ are completely dependent on
+the quality of levels proposed by the generator. Our results show that simply curating high regret
+levels discovered via random search is enough to outperform the RL-based PAIRED teacher in the
+domains studied. We expect that advancing methods for defining or adapting the generator’s proposal
+distribution holds great potential to improve the efficacy of our methods, especially in more complex,
+higher-dimensional domains, where random search may prove ineffective for finding useful training
+levels. Importantly, our methods assume an appropriate choice of what constitutes the UPOMDP’s
+free parameters. Our methods cannot be expected to produce robust policies for zero-shot transfer if
+the set of environments defined by the free parameters does not sufficiently align with the transfer
+domain of interest. Designing the environment parameterization for successful zero-shot transfer to a
+specific target domain can be highly non-trivial, posing an important problem for future research.
+Looking beyond environment design, we notice that long-running UED processes in expansive
+UPDOMPs closely resemble continual learning in open-ended domains. The congruency of these
+settings suggests our contributions around DCD may extend to more general continual learning
+problems in which agents must learn to master a diverse sequence of tasks with predefined (or
+inferred) episode boundaries—if tasks are assumed to be designed by a regret-maximizing teacher.
+Thus, DCD-based methods like PLR⊥ may yield more general policies for continual learning. We
+anticipate many exciting crossovers between these areas of research in the years to come.
+
+Broader Impact
+Given the rapid progress in applying RL to ever more complex domains, we can confidently expect a
+continued rise in real-world deployments of RL systems in the coming years. Unlike in simulation, in
+the real world, the environment tends to exhibit much more variability, which may not be explicitly
+coded into the associated simulator used for training. Deployed RL agents are thus liable to make
+many mistakes due to unexpected environment variations. Our methods for improving UED lead
+to more robust RL agents across a potentially wide range of changes to the environment. Thus, our
+work may prove to be a useful tool in attaining safer, more reliable RL agents, helping to enable the
+application of RL to more real-world problems.
+By increasing the applicability of RL to real-world settings, our work may exacerbate the more
+general risks of deploying machine learning: increased unemployment; overreliance on biased models
+that potentially reinforce common misconceptions and societal inequalities; and the advancement
+of automated weapons. Particular to our methods, as discussed in Section 8, aligning the choice of
+free parameters for the UPOMDP to the target domain of interest is important for successful transfer.
+While this choice of free parameters then acts as a potential point of failure, the UPOMDP abstraction
+underlying UED reveals this problem generally impacts all RL methods aiming to train robust policies;
+a UPOMDP simply makes explicit the otherwise implicit space of environment configurations defined
+by a standard POMDP. By forcing us to consider where our training environment departs from
+reality, UED methods encourage designing RL systems in a way that is more aware of the underlying
+assumptions about the environment, thereby leading to more principled, robust systems.
+
+Acknowledgments and Disclosure of Funding
+We would like to thank Natasha Jaques, Patrick Labatut, and Heinrich Küttler for fruitful discussions
+that helped inform this work. Further, we are grateful to our anonymous reviewers for their valuable
+feedback. MJ is supported by the FAIR PhD program. This work was funded by Facebook.
+10
+
+References
+[1] O. M. Andrychowicz, B. Baker, M. Chociej, R. Józefowicz, B. McGrew, J. Pachocki, A. Petron,
+M. Plappert, G. Powell, A. Ray, J. Schneider, S. Sidor, J. Tobin, P. Welinder, L. Weng, and
+W. Zaremba. Learning dexterous in-hand manipulation. The International Journal of Robotics
+Research, 39(1):3–20, 2020.
+[2] Y. Bengio, J. Louradour, R. Collobert, and J. Weston. Curriculum learning. In Proceedings of
+the 26th Annual International Conference on Machine Learning, ICML ’09, page 41–48, New
+York, NY, USA, 2009. Association for Computing Machinery.
+[3] J. Bergstra and Y. Bengio. Random search for hyper-parameter optimization. Journal of
+Machine Learning Research, 13:281–305, 2012.
+[4] C. Berner, G. Brockman, B. Chan, V. Cheung, P. D˛ebiak, C. Dennison, D. Farhi, Q. Fischer,
+S. Hashme, C. Hesse, et al. Dota 2 with large scale deep reinforcement learning. arXiv preprint
+arXiv:1912.06680, 2019.
+[5] G. Brockman, V. Cheung, L. Pettersson, J. Schneider, J. Schulman, J. Tang, and W. Zaremba.
+Openai gym. CoRR, abs/1606.01540, 2016.
+[6] A. Campero, R. Raileanu, H. Kuttler, J. B. Tenenbaum, T. Rocktäschel, and E. Grefenstette.
+Learning with AMIGo: Adversarially motivated intrinsic goals. In International Conference on
+Learning Representations, 2021.
+[7] M. Chevalier-Boisvert, L. Willems, and S. Pal. Minimalistic gridworld environment for openai
+gym. https://github.com/maximecb/gym-minigrid, 2018.
+[8] K. Cobbe, C. Hesse, J. Hilton, and J. Schulman. Leveraging procedural generation to benchmark
+reinforcement learning. In Proceedings of the 37th International Conference on Machine
+Learning, pages 2048–2056, 2020.
+[9] K. Cobbe, O. Klimov, C. Hesse, T. Kim, and J. Schulman. Quantifying generalization in
+reinforcement learning. In K. Chaudhuri and R. Salakhutdinov, editors, Proceedings of the
+36th International Conference on Machine Learning, ICML 2019, 9-15 June 2019, Long Beach,
+California, USA, Proceedings of Machine Learning Research. PMLR, 2019.
+[10] M. Dennis, N. Jaques, E. Vinitsky, A. Bayen, S. Russell, A. Critch, and S. Levine. Emergent
+complexity and zero-shot transfer via unsupervised environment design. In Advances in Neural
+Information Processing Systems, volume 33, 2020.
+[11] K. Fang, Y. Zhu, S. Savarese, and F.-F. Li. Adaptive procedural task generation for hardexploration problems. In International Conference on Learning Representations, 2021.
+[12] C. Florensa, D. Held, X. Geng, and P. Abbeel. Automatic goal generation for reinforcement
+learning agents. In J. Dy and A. Krause, editors, Proceedings of the 35th International
+Conference on Machine Learning, volume 80 of Proceedings of Machine Learning Research,
+pages 1515–1528. PMLR, 10 2018.
+[13] J. Heinrich, M. Lanctot, and D. Silver. Fictitious self-play in extensive-form games. In
+Proceedings of the 32nd International Conference on Machine Learning, pages 805–813, 2015.
+[14] A. Jabri, K. Hsu, A. Gupta, B. Eysenbach, S. Levine, and C. Finn. Unsupervised curricula for
+visual meta-reinforcement learning. In Advances in Neural Information Processing Systems,
+volume 32, 2019.
+[15] N. Jakobi. Evolutionary robotics and the radical envelope-of-noise hypothesis. Adaptive
+Behavior, 6(2):325–368, 1997.
+[16] S. James, A. J. Davison, and E. Johns. Transferring end-to-end visuomotor control from
+simulation to real world for a multi-stage task. In 1st Conference on Robot Learning, 2017.
+[17] M. Jiang, E. Grefenstette, and T. Rocktäschel. Prioritized level replay. In Proceedings of the
+38th International Conference on Machine Learning, ICML 2021, 18-24 July 2021, Virtual
+Event, volume 139 of Proceedings of Machine Learning Research, pages 4940–4950. PMLR,
+2021.
+[18] X. Ma. Car racing with pytorch. https://github.com/xtma/pytorch_car_caring, 2019.
+[19] T. Matiisen, A. Oliver, T. Cohen, and J. Schulman. Teacher-student curriculum learning. IEEE
+Transactions on Neural Networks and Learning Systems, PP, 07 2017.
+11
+
+[20] B. Mehta, M. Diaz, F. Golemo, C. J. Pal, and L. Paull. Active domain randomization. In L. P.
+Kaelbling, D. Kragic, and K. Sugiura, editors, 3rd Annual Conference on Robot Learning, CoRL
+2019, Osaka, Japan, October 30 - November 1, 2019, Proceedings, volume 100 of Proceedings
+of Machine Learning Research, pages 1162–1176. PMLR, 2019.
+[21] V. Mnih, K. Kavukcuoglu, D. Silver, A. A. Rusu, J. Veness, M. G. Bellemare, A. Graves,
+M. Riedmiller, A. K. Fidjeland, G. Ostrovski, et al. Human-level control through deep
+reinforcement learning. Nature, 518(7540):529–533, 2015.
+[22] M. E. Mortenson. Mathematics for Computer Graphics Applications. Industrial Press Inc.,
+1999.
+[23] S. Narvekar, B. Peng, M. Leonetti, J. Sinapov, M. E. Taylor, and P. Stone. Curriculum learning
+for reinforcement learning domains: A framework and survey. Journal of Machine Learning
+Research, 21:181:1–181:50, 2020.
+[24] J. F. Nash et al. Equilibrium points in n-person games. Proceedings of the National Academy of
+Sciences, 36(1):48–49, 1950.
+[25] OpenAI, I. Akkaya, M. Andrychowicz, M. Chociej, M. Litwin, B. McGrew, A. Petron, A. Paino,
+M. Plappert, G. Powell, R. Ribas, J. Schneider, N. Tezak, J. Tworek, P. Welinder, L. Weng,
+Q. Yuan, W. Zaremba, and L. Zhang. Solving rubik’s cube with a robot hand. CoRR,
+abs/1910.07113, 2019.
+[26] O. OpenAI, M. Plappert, R. Sampedro, T. Xu, I. Akkaya, V. Kosaraju, P. Welinder, R. D’Sa,
+A. Petron, H. P. de Oliveira Pinto, A. Paino, H. Noh, L. Weng, Q. Yuan, C. Chu, and W. Zaremba.
+Asymmetric self-play for automatic goal discovery in robotic manipulation, 2021.
+[27] E. Popovici, A. Bucci, R. P. Wiegand, and E. D. De Jong. Coevolutionary Principles, pages
+987–1033. Springer Berlin Heidelberg, 2012.
+[28] R. Portelas, C. Colas, L. Weng, K. Hofmann, and P.-Y. Oudeyer. Automatic curriculum learning
+for deep rl: A short survey. In C. Bessiere, editor, Proceedings of the Twenty-Ninth International
+Joint Conference on Artificial Intelligence, IJCAI-20, pages 4819–4825. International Joint
+Conferences on Artificial Intelligence Organization, 7 2020. Survey track.
+[29] S. Racaniere, A. Lampinen, A. Santoro, D. Reichert, V. Firoiu, and T. Lillicrap. Automated
+curriculum generation through setter-solver interactions. In International Conference on
+Learning Representations, 2020.
+[30] S. Risi and J. Togelius. Increasing generality in machine learning through procedural content
+generation. Nature Machine Intelligence, 2(8):428–436, 8 2020.
+[31] L. J. Savage. The theory of statistical decision. Journal of the American Statistical association,
+46(253):55–67, 1951.
+[32] J. Schmidhuber. Powerplay: Training an increasingly general problem solver by continually
+searching for the simplest still unsolvable problem. Frontiers in Psychology, 4:313, 06 2013.
+[33] J. Schulman, P. Moritz, S. Levine, M. I. Jordan, and P. Abbeel. High-dimensional continuous
+control using generalized advantage estimation. In Y. Bengio and Y. LeCun, editors, 4th
+International Conference on Learning Representations, ICLR 2016, San Juan, Puerto Rico,
+May 2-4, 2016, Conference Track Proceedings, 2016.
+[34] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov. Proximal policy optimization
+algorithms. CoRR, abs/1707.06347, 2017.
+[35] D. Silver, A. Huang, C. J. Maddison, A. Guez, L. Sifre, G. Van Den Driessche, J. Schrittwieser,
+I. Antonoglou, V. Panneershelvam, M. Lanctot, et al. Mastering the game of go with deep neural
+networks and tree search. Nature, 529(7587):484–489, 2016.
+[36] D. Silver, T. Hubert, J. Schrittwieser, I. Antonoglou, M. Lai, A. Guez, M. Lanctot, L. Sifre,
+D. Kumaran, T. Graepel, et al. A general reinforcement learning algorithm that masters chess,
+shogi, and go through self-play. Science, 362(6419):1140–1144, 2018.
+[37] S. Sukhbaatar, Z. Lin, I. Kostrikov, G. Synnaeve, A. Szlam, and R. Fergus. Intrinsic motivation
+and automatic curricula via asymmetric self-play. In 6th International Conference on Learning
+Representations, ICLR 2018, Vancouver, BC, Canada, April 30 - May 3, 2018, Conference Track
+Proceedings. OpenReview.net, 2018.
+12
+
+[38] Y. Tang, D. Nguyen, and D. Ha. Neuroevolution of self-interpretable agents. In Proceedings of
+the Genetic and Evolutionary Computation Conference, 2020.
+[39] J. Tobin, R. Fong, A. Ray, J. Schneider, W. Zaremba, and P. Abbeel. Domain randomization
+for transferring deep neural networks from simulation to the real world. In 2017 IEEE/RSJ
+International Conference on Intelligent Robots and Systems (IROS), pages 23–30, 2017.
+[40] O. Vinyals, I. Babuschkin, W. M. Czarnecki, M. Mathieu, A. Dudzik, J. Chung, D. H. Choi,
+R. Powell, T. Ewalds, P. Georgiev, et al. Grandmaster level in StarCraft II using multi-agent
+reinforcement learning. Nature, 575(7782):350–354, 2019.
+[41] R. Wang, J. Lehman, J. Clune, and K. O. Stanley. Paired open-ended trailblazer (POET):
+endlessly generating increasingly complex and diverse learning environments and their solutions.
+CoRR, abs/1901.01753, 2019.
+[42] R. Wang, J. Lehman, A. Rawal, J. Zhi, Y. Li, J. Clune, and K. Stanley. Enhanced POET:
+Open-ended reinforcement learning through unbounded invention of learning challenges and
+their solutions. In Proceedings of the 37th International Conference on Machine Learning,
+pages 9940–9951, 2020.
+[43] B. L. Welch. The generalization of ‘student’s’ problem when several different population
+variances are involved. Biometrika, 34(1-2):28–35, 1947.
+[44] A. Zhang, N. Ballas, and J. Pineau. A dissection of overfitting and generalization in continuous
+reinforcement learning. arXiv preprint arXiv:1806.07937, 2018.
+[45] Y. Zhang, P. Abbeel, and L. Pinto. Automatic curriculum learning through value disagreement.
+In Advances in Neural Information Processing Systems, volume 33, pages 7648–7659, 2020.
+
+13
+
+A
+
+Theoretical Results
+
+In this section we prove the theoretical results around the dual curriculum game and use these results
+to show approximation bounds for our methods, given that they have reached a Nash equilibrium
+(NE).
+The first theorem is the main result that allows us to analyze dual curriculum games. The high-level
+result says that the NE of a dual curriculum game are approximate NE of the base game from the
+perspective of any of the individual players, or from the perspective of the joint strategy.
+Theorem 1. Let B be the maximum difference between Ut1 and Ut2 , and let (π, θ1 , θ2 ) be a NE for
+G. Then (π, pθ1 + (1 − p)θ2 ) is an approximate NE for the base game with either teacher or for a
+teacher optimizing their joint objective. More precisely, it is a 2Bp(1 − p)-approximate NE when
+Ut = pUt1 + (1 − p)Ut2 , a 2B(1 − p)-approximate NE when Ut = Ut1 , and a 2Bp-approximate NE
+when Ut = Ut2 .
+At a high level, this is true because, for low values of p, the best-response strategies for the individual
+players can be thought of as approximate-best response strategies for the joint-player, and vis-versa.
+Since the Nash Equilibrium consists of each of the players playing their own best response, they must
+be playing an approximate best response for the joint-player. We provide a formal proof below:
+Proof. Let B be the maximum difference between Ut1 and Ut2 , and let (π, θ1 , θ2 ) be a Nash
+Equilibrium for G. Then consider pθ1 + (1 − p)θ2 as a strategy in the base game for the joint
+player pUt1 + (1 − p)Ut2 . Let θ1+2 be the best response for the joint player to π. Since π is a best
+response by assumption, it is sufficient to show that pθ1 + (1 − p)θ2 is an approximate best response.
+We then have
+Ut (π, pθ1 + (1 − p)θ2 )
+
+(6)
+
+2
+
+=p Ut1 (π, θ1 ) + p(1 − p)Ut2 (π, θ1 ) + p(1 − p)Ut1 (π, θ2 ) + (1 − p)2 Ut2 (π, θ2 )
+(7)
+2 1
+1
+1
+1
+2
+2
+2 2
+2
+≥p Ut (π, θ ) + p(1 − p)(Ut (π, θ ) − B) + p(1 − p)(Ut (π, θ ) − B) + (1 − p) Ut (π, θ ) (8)
+=pUt1 (π, θ1 ) + (1 − p)Ut2 (π, θ2 ) − 2Bp(1 − p)
+(9)
+1+2
+≥Ut (π, θ ) − 2Bp(1 − p)
+(10)
+Thus, we have shown that (π, pθ1 + (1 − p)θ2 ) represents an 2Bp(1 − p)-Nash equilibrium for the
+joint player. For the first teacher we have the opposite condition trivially, the teacher is doing a best
+response to the student. We must now show that the student is doing an approximate best response to
+the teacher.
+Let π 1 be the best response to the first teacher (with utility Ut1 ) and let π 1+2 be the best
+response policy to the joint teacher. In this argument we will start with the observation that
+Us (π 1 , θ1+2 ) ≤ Us (π 1+2 , θ1+2 ) by definition, and then argue that we can construct an upper
+bound on the performance of π 1 on θ1 , Us (π 1 , θ1 ), and a lower bound on the performance of π 1+2
+on θ1 , Us (π 1+2 , θ1 ). We get the desired result by combining these two arguments.
+First we use Us (π 1 , θ1+2 ) to upper bound Us (π 1 , θ1 ):
+Us (π 1 , θ1+2 ) = pUs (π 1 , θ1 ) + (1 − p)Us (π 1 , θ2 )
+1
+
+1
+
+1
+
+(11)
+
+1
+
+≥ pUs (π , θ ) + (1 − p)(Us (π , θ ) − B)
+
+(12)
+
+= Us (π 1 , θ1 ) − (1 − p)B
+
+(13)
+
+Second we can use Us (π 1+2 , θ1+2 ) to lower bound Us (π 1+2 , θ1 ):
+Us (π 1+2 , θ1+2 ) = pUs (π 1+2 , θ1 ) + (1 − p)Us (π 1+2 , θ2 )
+≤ pUs (π
+= Us (π
+
+1+2
+
+1+2
+
+1
+
+, θ ) + (1 − p)(Us (π
+1
+
+, θ ) + (1 − p)B
+14
+
+1+2
+
+1
+
+, θ ) + B)
+
+(14)
+(15)
+(16)
+
+Putting this all together, we have
+Us (π 1+2 , θ1 ) + (1 − p)B ≥ Us (π 1 , θ1 ) − (1 − p)B.
+Which, after rearranging terms, gives
+Us (π 1+2 , θ1 ) ≥ Us (π 1 , θ1 ) − 2(1 − p)B
+as desired. Repeating the symmetric argument shows the desired property for the second teacher.
+Following this main theorem, we can apply it to two of our methods. First we can apply it to naive
+PLR, which trains on a mixture of domain randomization (a teacher with utility UtC ) and the PLR
+bandit (a teacher with utility UtR ). This result shows that as we reduce the number of random
+episodes, the approximation to a minimax regret strategy improves. The intuition behind this is a
+direct application of Theorem 1, to show that it is an approximate Nash for the minimax regret player,
+and then showing that the minimax reget player has access to a strategy which ensures small regret,
+thus the regret that the equilibrium ensures must be approximately small.
+Corollary 1. Let G be the dual curriculum game in which the first teacher maximizes regret,
+so Ut1 = UtR , and the second teacher plays randomly, so Ut2 = UtU . Let V θ (π) be
+bounded in [B − , B + ] for all θ, π. Further, suppose that (π, θ1 , θ2 ) is a Nash equilibrium
+of G. Let R∗ = minπA ∈Π {maxθ,πB ∈Θ,Π {R EGRETθ (πA , πB )}} be the optimal worst-case
+regret. Then π is 2(B + − B − )(1 − p) close to having optimal worst-case regret, or formally,
+maxθ,πB ∈Θ,Π {R EGRETθ (πA , π)} ≥ R∗ − 2(B + − B − )(1 − p). Moreover, there exists environments
+for all values of p within a constant factor of achieving this bound.
+Proof. Since V θ (π) is bounded in [B − , B + ] for all θ, π, we know that Ut1 and Ut2 are within
+(B + − B − ) of each other. Thus by Theorem 1 we have that (π, θ1 , θ2 ) is a 2(B + − B − )(1 − p)Nash equilibrium of the base game when Ut = Ut1 . Thus π is a 2(B + − B − )(1 − p) approximate
+best-response to θ1 . However, since θ1 is a best response it chooses a regret maximizing parameter
+distribution. Thus the 2(B + − B − )(1 − p) does not just measure the sub-optimally of π with respect
+to θ1 , but measures the worst-case regret of π across all θ as desired.
+The intuition for the existence of examples in which this approximation of regret decays linearly in p
+is that a random level and the maximal regret level can be very different, and so the two measures
+may diverge drastically. For an example environment where π deviates strongly from the minimax
+regret strategy, consider the one-step UMDP described in Table 1.
+θ0
+θ1
+θ2 . . . θn
+π0
+B
+0
+0
+π1
+0
+B
+0
+Bp
+π2 Bp + 2
+0
+2 +
+Bp
+π3
+0
+Bp + 2
+2 +
+Table 1: In this environment all payoffs are between 0 and B(for p ∈ (0, 1) and  < B(1−p)
+), where
+2
+B is assumed to be positive. Randomizing between π0 and π1 minimizes regret, but choosing π2 or
+π3 is better in expectation under the uniform distribution. For large n it is especially clear that π2 and
+π3 have better expected value under the uniform distribution, though we show that even for n = 2,
+the optimal joint policy can mix between π2 and π3 incurring high regret.
+
+Note that in Table 1, no policy has less than B2 regret, since every policy will have to incur B regret
+on either {θ0 , θ1 } at least half the time. The minimax regret policy mixes uniformly between π0 and
+π1 to achieve regret of exactly B2 . We can ignore θ2 . . . θn for the regret calculations by assuming
+that  < B(1−p)
+, since every policy achieves less than B2 regret on these levels.
+2
+Our claim is that in equilibrium of G in this environment, the student policy can incur B2 + B(1−p)
+−
+2
+B(1−p)
+regret,
+−  more than the minimax regret policy. An example of such an equilibrium point
+2
+would be when the student policy uniformly randomizes between π2 and π3 , which we will call π2+3 ,
+when the minimax teacher uniformly randomizes between θ0 and θ1 which we will call θ0+1 , and
+15
+
+when the uniform teacher randomizes exactly which we call θ̃. To check this we must show that
+(π2+3 , θ0+1 , θ̃) is in fact a NE of G. Then we must show that π2+3 incurs B2 + B(1−p)
+−  regret.
+2
+To show that (π2+3 , θ0+1 , θ̃) is a NE of G first note that θ̃ is trivially a best response for the uniform
+utility function. Also note that θ0+1 maximizes the regret of π2+3 since θ0 and θ1 are the only two
+parameters on which π2+3 incur regret, and they incur the same regret; thus, any mixture over them
+will be optimal for the regret-based teacher. Finally, we need to show that π2+3 is optimal for the
+student. To do this we will calculate the expected value of each policy and notice that the expected
+values for π2 and π3 are higher than for π0 and π1 . Thus any optimal policy will place no weight on
+π0 and π1 , but any distribution over π2 and π3 will be equivalently optimal. By symmetry, we can
+show only the calculations for π0 and π2 :
+1
+1
+Bp
+π0 = p( B + 0) + (1 − p)0 =
+2
+2
+2
+1
+1
+Bp
+Bp
+π2 = p( (Bp + 2) + 0) + (1 − p)(
++ ) =
++
+2
+2
+2
+2
+
+(17)
+(18)
+
+Thus π2 and π3 achieve  higher expected value by the joint distribution. Thus, we know that π2+3 is
+a best response and (π2+3 , θ0+1 , θ̃) is in fact a NE of G.
+Finally, we simply need to show that π2+3 incurs B2 + B(1−p)
+−  regret. WLOG, we can evaluate
+2
+its regret on θ0 . On θ0 , π2+3 achieves Bp
+reward
+while
+π
+achieves
+B. Thus π2+3 incurs regret
++
+
+0
+2
+B(1−p)
+Bp
+B−Bp
+B
+B
+of B − ( 2 + ) = 2 + 2 −  = 2 + 2 −  as desired. As discussed before, since the
+−  more regret than optimal.
+minimax regret policy achieves B2 , this is B(1−p)
+2
+Lastly, we can also apply Theorem 1 to prove that REPAIRED achieves a minimax regret strategy in
+equilibrium. The intuition behind this corollary is that, since the utility functions of both teachers are
+the same, the approximate NE ensured by Theorem 1 is actually a true NE; therefore, the minimax
+theorem applies.
+Corollary 2. Let G be the dual curriculum game in which both teachers maximize regret, so
+Ut1 = Ut2 = UtR . Further, suppose that (π, θ1 , θ2 ) is a Nash equilibrium of G. Then, π ∈
+argminπA ∈Π {maxθ,πB ∈Θ,Π {R EGRETθ (πA , πB )}}.
+Proof. Since Ut1 = Ut2 = UtR the joint objective is pUt1 + (1 − p)Ut2 = UtR . Note
+that since Ut1 = Ut2 , B = 0. Thus by Theorem 1 (π, pθ1 + (1 − p)θ2 ) is a 0-Nash
+Equilibrium of the base game with teacher objective UtR , thus by the minimax theorem, π ∈
+argminπA ∈Π {maxθ,πB ∈Θ,Π {R EGRETθ (πA , πB )}} as desired.
+
+16
+
+B
+
+Algorithms
+
+Although the PLR update rule for the level buffer of size K in the case of unbounded training levels
+is described in [17], we provide the pseudocode for this update rule in Algorithm 2 for completeness.
+Given staleness coefficient ρ, temperature β, a prioritization function h (e.g. rank), level buffer scores
+S, level buffer timestamps C, and the current episode count c (i.e. current timestamp), the Preplay
+update takes the form
+Preplay = (1 − ρ) · PS + ρ · PC ,
+h(Si )1/β
+PS = P
+,
+1/β
+j h(Sj )
+c − Ci
+.
+Cj ∈C c − Cj
+
+PC = P
+
+The pseudocode for Replay-Enhanced PAIRED (REPAIRED), the method described in Section 5, is
+presented in Algorithm 3.
+Algorithm 2: PLR level-buffer update rule
+Input: Level buffer Λ of size K with scores S and timestamps C; level θ; level score Sθ ; and
+current episode count c
+if |Λ| < K then
+Insert θ into Λ, and set S(θ) = Sθ , C(θ) = c
+else
+Find level with minimal support, θmin = arg min Preplay (θ)
+θ
+
+if S(θmin ) < Sθ then
+Remove θmin from Λ
+Insert θ into Λ, and set S(θ) = Sθ , C(θ) = c
+Update Preplay with latest scores S and timestamps C
+end
+end
+Algorithm 3: REPAIRED
+Randomly initialize Protagonist, Antagonist, and Generator policies π A (φA ), π B (φB ), and θ̃
+Initialize Protagonist and Antagonist PLR level buffers ΛA and ΛB
+while not converged do
+Sample replay-decision Bernoulli, d ∼ PD (d)
+if d = 0 then
+Teacher policy θ̃ generates the next level, θ
+Set θA = θB = θ
+B
+Collect trajectory τ A on θA and τ B on θB with stop-gradients φA
+⊥ , φ⊥
+θ
+A
+B
+Update θ̃ with R EGRET (π , π )
+else
+PLR samples replay levels, θA ∼ ΛA and θB ∼ ΛB
+Collect trajectory τ A on θA and τ B on θB
+Update π A with rewards R(τ A ), and π B , with rewards R(τ B )
+end
+Compute PLR score S A = score(τ A , τ B , π A )
+Compute PLR score S B = score(τ B , τ A , π B )
+Update ΛA with θA using score S A
+Update ΛB with θB using score S B
+end
+
+17
+
+SixteenRooms
+
+SixteenRooms2
+
+Labyrinth
+
+Labyrinth2
+
+Maze
+
+Maze2
+
+PerfectMaze*
+
+LargeCorridor*
+
+Figure 7: Test maze environments for evaluating zero-shot transfer. An asterisk (*) next to the maze name
+indicates the maze is procedurally-generated, and thus each attempt corresponds to a random configuration of
+the maze.
+
+C
+
+Additional Experimental Results
+
+This section provides additional experimental results in MiniGrid and CarRacing environments. Note
+that we determine the statistical significance of our results using a Welch t-test [43].
+C.1
+
+Extended Results for MiniGrid
+
+Unlike the original maze experiments used to evaluate PAIRED in [10], we conduct our main maze
+experiments with a block budget of 25 blocks (reported in Section 6.1), rather than 50 blocks.
+Following the environment parameterization in [10], for a block budget of B, the teacher attempts
+to place B blocks that act as obstacles when designing each maze level. However, the teacher can
+place fewer than B blocks, as placing a block in a location already occupied by a block results in
+a no-opt. We found that PAIRED underperforms DR when both methods are given a budget of 50
+blocks, a setting in which randomly sampled mazes exhibit enough structural complexity to allow
+DR to learn highly robust policies. Note that [10] used a DR baseline with a 25-block budget. With a
+50-block budget, DR and all replay-based methods are able to fully solve almost all test mazes after
+around 500M steps of training, making UED of mazes with a 50-block budget too simple of a setting
+to provide an informative comparison among the methods studied.
+C.1.1
+
+Mazes with a 25-block budget
+
+We report the results of evaluating policies produced by each method after 250M training steps on each
+of the zero-shot transfer environments in Figure 8 and Table 2. Examples of each test environment are
+presented in Figure 7. All replay-based UED methods lead to policies with statistically significantly
+(p < 0.05) higher test performance than PAIRED, and PLR⊥ , after 500M training steps, similarly
+improves over PLR when trained for an equivalent number of gradient updates (as replay rate is set to
+0.5). Note that for PAIRED and REPAIRED, we evaluate the protagonist policy.
+To provide a further sense of the training dynamics, we present the per-agent training returns for
+each method in Figure 9. Notably PAIRED results in antagonists that attain higher returns than the
+protagonist as expected. This dynamic takes on a mild oscillation, visible in the training return curve
+of the generator (adversary). As the protagonist adapts to the adversarial levels, the generator’s return
+reduces, until the generator discovers new configurations that better exploit the relative differences
+between the two student policies. Notably, the adversary under REPAIRED seems to propose more
+difficult levels for both the protagonist and antagonist, while the resulting protagonist policy exhibits
+improved test performance, as seen in Figure 4.
+DR
+
+Solved rate
+
+SixteenRooms SixteenRooms2
+1.0
+
+Minimax
+
+PAIRED
+
+REPAIRED
+
+PLR
+
+PLR
+
+Labyrinth
+
+Labyrinth2
+
+Maze
+
+Maze2
+
+PerfectMazes
+
+LargeCorridor
+
+0.5
+
+0.0
+
+Figure 8: Zero-shot test performance on OOD environments when trained with a 25-block budget. The plots
+report the median and interquartile range of solved rates over 10 runs.
+
+18
+
+Table 2: Mean test returns and standard errors on zero-shot transfer mazes for each method using a 25-block
+budget. Results are aggregated over 100 attempts for each maze across 10 runs per method. Bolded figures
+overlap in standard error with the method attaining the maximum mean test return in each row.
+Environment
+
+DR
+
+Minimax
+
+PAIRED
+
+REPAIRED
+
+PLR
+
+PLR⊥
+
+Labyrinth
+Labyrinth2
+LargeCorridor
+Maze
+Maze2
+PerfectMaze
+SixteenRooms
+SixteenRooms2
+
+0.2 ± 0.1
+0.2 ± 0.1
+0.7 ± 0.1
+0.0 ± 0.0
+0.0 ± 0.0
+0.3 ± 0.1
+0.9 ± 0.0
+0.7 ± 0.1
+
+0.0 ± 0.0
+0.0 ± 0.0
+0.1 ± 0.1
+0.0 ± 0.0
+0.0 ± 0.0
+0.0 ± 0.0
+0.1 ± 0.1
+0.0 ± 0.0
+
+0.3 ± 0.1
+0.2 ± 0.1
+0.3 ± 0.1
+0.0 ± 0.0
+0.1 ± 0.1
+0.0 ± 0.0
+0.7 ± 0.1
+0.0 ± 0.0
+
+0.1 ± 0.0
+0.2 ± 0.1
+0.5 ± 0.1
+0.2 ± 0.1
+0.1 ± 0.1
+0.4 ± 0.1
+0.9 ± 0.1
+0.6 ± 0.1
+
+0.3 ± 0.1
+0.4 ± 0.1
+0.7 ± 0.1
+0.3 ± 0.1
+0.4 ± 0.1
+0.4 ± 0.1
+1.0 ± 0.0
+0.5 ± 0.1
+
+0.5 ± 0.1
+0.6 ± 0.1
+0.8 ± 0.1
+0.6 ± 0.1
+0.4 ± 0.1
+0.6 ± 0.1
+0.8 ± 0.1
+0.7 ± 0.1
+
+0.7 ± 0.1
+0.8 ± 0.1
+0.8 ± 0.1
+0.5 ± 0.1
+0.5 ± 0.1
+0.5 ± 0.1
+1.0 ± 0.0
+0.7 ± 0.1
+
+Mean
+
+0.4 ± 0.0
+
+0.0 ± 0.0
+
+0.2 ± 0.0
+
+0.4 ± 0.0
+
+0.5 ± 0.1
+
+0.6 ± 0.1
+
+0.7 ± 0.1
+
+Mean return
+
+DR
+Protagonist
+
+Minimax
+
+1
+
+0
+
+PAIRED
+REPAIRED
+Antagonist
+1
+
+0
+
+250M
+
+0
+
+PLR
+
+PLR⊥ (500M)
+
+PLR
+Generator (Adversary)
+
+0.5
+
+0
+
+250M
+
+0.0
+
+0
+
+250M
+
+Steps
+
+Figure 9: Training returns for each participating agent in each method, when trained with a 25-block budget.
+Plots show the mean and standard error over 10 runs.
+
+20.0
+10.0
+0
+
+250M
+
+20.0
+10.0
+0
+
+Path length
+
+30.0
+
+PLR
+Solved path length
+
+REPAIRED
+PLR
+Shortest path length
+Path length
+
+Minimax
+PAIRED
+Number of blocks
+Block count
+
+LZW complexity
+
+DR
+Action complexity
+
+10.0
+
+250M
+
+5.0
+0
+
+250M
+
+10.0
+7.5
+5.0
+2.5
+
+0
+
+250M
+
+Steps
+
+Figure 10: Complexity metrics of environments generated by the teacher throughout training with a 25-block
+budget. Plots show the mean and standard error of 10 runs.
+
+Additional complexity metrics tracked during training are shown in Figure 10. Alongside the number
+of blocks and shortest path length of levels seen during training, we also track solved path length and
+action complexity. Solved path length corresponds to the shortest path length from start position to
+goal in the levels successfully solved by the primary student agent (e.g. the protagonist in PAIRED).
+Action complexity corresponds to the Lempel-Ziv-Welch (LZW) complexity—a commonly used
+measure of string compressibility—of the action sequence taken during the primary student agent’s
+trajectories. As expected, DR results in constant complexity for number of blocks and path length
+metrics. REPAIRED generates mazes with significantly greater complexity in terms of block count.
+The lower path lengths seen by REPAIRED suggest that it trains agents that more readily generalize
+to different path lengths, thereby pressuring the adversary to raise complexity in terms of block
+count. Further, given the high replay rates used, the REPAIRED adversary sees far fewer gradient
+updates with which to adjust its policy. As its shortest path lengths exceed that of PAIRED after
+adjusting proportionately by replay rate, foreseeably, over a longer period, the shortest path lengths
+generated by REPAIRED may meet or exceed that of PAIRED. In all cases, the action complexity
+reduces as the agent becomes more decisive, and we see that both PAIRED and REPAIRED lead to
+more decisive policies—as indicated by the simultaneously lower action complexity and greater level
+complexity in terms of higher block count (relative to DR) and, in the case of PAIRED, higher path
+length metrics. Lastly, it is interesting to note that while the random generator used by PLR produces
+levels of average complexity, the complexity of curated levels, as revealed in Figure 4, is significantly
+higher and, in the case of path length, steadily increasing.
+19
+
+C.1.2
+
+Mazes with a 50-block budget
+
+Similarly, Figures 12, 13, and 14 report the training dynamics and test performance of agents trained
+using each method with a 50-block budget for 500M steps. Figure 11 shows that DR and all replaybased methods are able to reach near perfect solve rates on most test mazes after 500M steps of
+training, with the exception of the Maze and PerfectMaze environments, where the test performances
+across methods are not markedly dissimilar, making the setting with a 50-block budget uninformative
+for assessing performance differences among these methods. The example mazes generated by each
+method, presented in Figure 15, shows that the larger block budget allows DR to sample mazes
+with greater structural complexity, leading to robust policies and diminishing the benefits of the
+UED methods studied. Therefore, in this work, we focus the main results for the maze domain on
+the more challenging setting with a 25-block budget. Note that the impact of the block budget on
+test performance further highlights the importance of properly adapting the training distribution
+for producing policies exhibiting high generality—a problem that our replay-based UED methods
+effectively address, as demonstrated by the results for the 25-block setting.
+DR
+
+Solved rate
+
+SixteenRooms SixteenRooms2
+1.0
+
+Minimax
+
+PAIRED
+
+REPAIRED
+
+PLR
+
+PLR
+
+Labyrinth
+
+Labyrinth2
+
+Maze
+
+Maze2
+
+PerfectMazes
+
+LargeCorridor
+
+0.5
+
+0.0
+
+Figure 11: Zero-shot test performance on OOD environments when trained with a 50-block budget. The plots
+show the median and interquartile range of solved rates over 10 runs.
+
+Minimax
+
+PAIRED
+
+REPAIRED
+
+Labyrinth
+
+1
+
+PLR⊥
+
+PLR
+
+Maze
+
+1
+
+1
+
+SixteenRooms
+
+PAIRED, 3B steps
+Median
+
+Solved rate
+
+DR
+SixteenRooms
+
+0.5
+
+0.2
+
+0.2
+0.0
+
+0.0
+0
+
+Solved rate
+
+Labyrinth
+
+0.8
+
+0
+
+5K
+
+Number of blocks
+
+0
+
+500M
+
+0
+0
+
+500M
+
+0
+
+Path length
+
+0
+
+12
+
+40
+
+Block count
+
+0
+
+5K
+
+Shortest path length
+
+30
+20
+10
+
+0
+
+500M
+
+Steps
+
+5K
+
+10
+8
+6
+0
+
+5K
+
+PPO updates
+
+Figure 12: Test performance as a function of number of training steps with a 50-block budget (left), and test
+performance and complexity metrics as a function of number of PPO updates (right). The plots show the mean
+and standard error over 10 runs.
+
+Mean return
+
+DR
+Protagonist
+
+Minimax
+
+1
+
+0
+
+PAIRED
+REPAIRED
+Antagonist
+1
+
+0
+
+500M
+
+0
+
+PLR
+
+PLR
+Generator (Adversary)
+
+0.5
+
+0
+
+500M
+
+0.0
+
+0
+
+500M
+
+Steps
+
+Figure 13: Training returns for each participating agent in each method when training with a 50-block budget.
+Plots show the mean and standard error over 10 runs.
+
+20
+
+20.0
+10.0
+
+0
+
+500M
+
+40.0
+
+Path length
+
+30.0
+
+20.0
+0
+
+PLR
+Solved path length
+
+REPAIRED
+PLR
+Shortest path length
+Path length
+
+Minimax
+PAIRED
+Number of blocks
+Block count
+
+LZW complexity
+
+DR
+Action complexity
+
+10.0
+5.0
+
+500M
+
+0
+
+10.0
+5.0
+
+500M
+
+0
+
+500M
+
+Steps
+
+Figure 14: Complexity metrics of environments generated by the teacher throughout training with a 50-block
+budget. Plots show the mean and standard error of 10 runs.
+DR
+
+PAIRED
+
+REPAIRED
+
+PLR
+
+PLR⊥
+
+Figure 15: Example mazes generated by each method when using a 50-block budget.
+C.2
+
+Extended Results for CarRacing
+
+The training return plots for each agent, shown in Figure 16, reveal that PAIRED’s generator
+(adversary) overexploits the relative advantages of the antagonist over the protagonist, leading to
+a highly suboptimal protagonist policy. In fact, as shown in the right-most plot of Figure 16, the
+resulting protagonist policies suffer such performance degradation from the adversarial curriculum
+that they can no longer even successfully drive on the original, simpler CarRacing tracks.
+Additionally, we present per-track zero-shot transfer returns for the entire CarRacing-F1 benchmark
+after 5M training steps (equivalent to 40M environment interaction steps due to the usage of action
+repeat) in Table 3. Results report the mean and standard deviation over 100 attempts per track across
+10 seeds. While DR acts as a strong baseline in terms of zero-shot generalization in this setting,
+PLR⊥ either attains the highest mean return, or matches the method achieving the highest return
+within standard error on all tracks. The mean performance of PLR⊥ across the full benchmark is
+statistically significantly higher (p < 0.001) than that of all other methods. Notably, PAIRED sees
+poor results, likely due to the generator’s ability to overexploit the differences between antagonist
+and protagonist to detrimental effect in this domain. We see that REPAIRED mitigates this effect to a
+degree, resulting in more competitive policies. Note that due to the high compute overhead of training
+the AttentionAgent (8.2 billion steps of training over a population 256 agents) [38], we resorted to
+evaluating its mean F1 performance using the pre-trained model weights provided by the authors with
+their public code release. As a result, we only have a single training run for AttentionAgent. This
+means we cannot reliably compute standard errors for this baseline, but we believe that showing the
+performance for a single training seed of AttentionAgent on the F1 benchmark alongside our methods,
+as done in Figure 6, nonetheless provides a useful comparison for further contextualizing the efficacy
+of our methods. This comparison highlights how, by only modifying the training curriculum, our
+methods produce policies with test returns exceeding that of AttentionAgent—which in contrast, uses
+a powerful attention-based policy and a much larger number of training steps.
+As a further analysis of robustness, we inspect the minimum returns over 10 attempts per track,
+averaged over 10 runs per method. We present these results (mean and standard error) in Figure 17.
+PLR⊥ achieves consistently higher minimum returns on average for many of the tracks compared to
+the other methods, including on the challenging Russia and USA tracks. The fact that simply curating
+random levels, as done by PLR⊥ , more reliably approaches a minimax regret policy than PAIRED
+and REPAIRED suggests that RL may not be an effective means for optimizing the PAIRED teacher.
+21
+
+Table 3: Mean test returns and standard errors of each method on the full F1 benchmark. Results are aggregated
+over 10 attempts for each track across 10 runs per method. Bolded figures overlap in standard error with the
+method attaining the maximum mean test return in each row. We see that PLR⊥ consistently either outperforms
+the other methods or matches PLR, the next best performing method. Note that we separately report the results
+of a single run for AttentionAgent due to its high compute overhead.
+Track
+
+DR
+
+PAIRED
+
+REPAIRED
+
+PLR
+
+PLR⊥
+
+Australia
+Austria
+Bahrain
+Belgium
+Brazil
+China
+France
+Germany
+Hungary
+Italy
+Malaysia
+Mexico
+Monaco
+Netherlands
+Portugal
+Russia
+Singapore
+Spain
+UK
+USA
+
+484 ± 29
+409 ± 21
+298 ± 27
+328 ± 16
+309 ± 23
+115 ± 24
+279 ± 32
+274 ± 23
+465 ± 32
+461 ± 27
+236 ± 25
+458 ± 33
+268 ± 28
+328 ± 26
+324 ± 27
+382 ± 30
+336 ± 29
+433 ± 24
+393 ± 28
+263 ± 31
+
+100 ± 22
+92 ± 24
+−35 ± 19
+72 ± 20
+76 ± 18
+−101 ± 9
+−81 ± 13
+−33 ± 16
+98 ± 29
+132 ± 24
+−26 ± 17
+67 ± 31
+−28 ± 18
+70 ± 20
+−49 ± 13
+51 ± 21
+−35 ± 14
+134 ± 24
+138 ± 25
+−119 ± 11
+
+414 ± 27
+345 ± 19
+295 ± 23
+293 ± 19
+256 ± 19
+7 ± 18
+240 ± 29
+272 ± 22
+414 ± 29
+371 ± 25
+200 ± 17
+415 ± 30
+256 ± 26
+307 ± 21
+265 ± 21
+419 ± 25
+274 ± 21
+358 ± 24
+380 ± 22
+120 ± 25
+
+545 ± 23
+442 ± 18
+411 ± 22
+327 ± 15
+387 ± 17
+84 ± 20
+290 ± 35
+388 ± 20
+533 ± 26
+588 ± 20
+283 ± 20
+561 ± 21
+360 ± 32
+418 ± 21
+407 ± 15
+479 ± 24
+386 ± 22
+482 ± 17
+456 ± 16
+243 ± 28
+
+692 ± 15
+615 ± 13
+590 ± 15
+474 ± 12
+455 ± 13
+228 ± 24
+478 ± 22
+499 ± 18
+708 ± 17
+625 ± 12
+400 ± 18
+712 ± 12
+486 ± 19
+419 ± 25
+483 ± 13
+649 ± 14
+566 ± 15
+622 ± 14
+538 ± 17
+381 ± 33
+
+826
+511
+372
+668
+145
+344
+153
+214
+769
+798
+300
+580
+835
+131
+606
+732
+276
+759
+729
+-192
+
+Mean
+
+341 ± 22
+
+19 ± 15
+
+293 ± 18
+
+408 ± 12
+
+534 ± 7
+
+477
+
+DR
+
+PAIRED
+Antagonist
+
+Mean return
+
+Protagonist
+
+REPAIRED
+
+AttentionAgent
+
+PLR
+
+PLR
+Generator
+
+CarRacing-v0
+
+800
+
+900
+
+2
+
+900
+
+400
+
+450
+
+1
+
+450
+
+0
+
+0
+
+5M
+
+0
+
+0
+
+5M
+
+0
+
+0
+
+5M
+
+0
+
+0
+
+5M
+
+Steps
+
+Figure 16: From left to right: Returns attained by the protagonist, antagonist, and generator (adversary)
+throughout training; the protagonist’s zero-shot transfer performance on the original CarRacing-v0 during
+training. The mean and standard error over 10 runs are shown.
+
+22
+
+23
+
+Minimum return
+
+200
+
+0
+
+200
+
+400
+
+600
+
+o
+
+xic
+
+Me
+
+s
+Au
+
+ly
+
+Ita
+
+str
+
+Au
+
+ia
+ain
+
+Sp
+
+ry
+
+ga
+
+n
+Hu
+
+ia
+
+ss
+
+Ru
+
+UK
+S
+
+re
+
+po
+
+a
+ing
+
+PAIRED
+
+ium
+
+lg
+Be
+
+n
+rai
+
+h
+Ba
+
+REPAIRED
+
+o
+
+ac
+
+n
+Mo
+
+PLR
+
+rt
+Po
+
+al
+ug
+
+il
+az
+Br
+
+PLR
+
+Ge
+
+y
+an
+rm
+
+Ma
+
+sia
+lay
+
+nc
+Fra
+
+e
+N
+
+s
+nd
+rla
+e
+eth
+
+Figure 17: Minimum returns attained across 10 test episodes per track per seed. Bars report mean and standard error over 10 training runs.
+
+lia
+tra
+
+DR
+
+A
+US
+
+Ch
+
+ina
+
+Table 4: Hyperparameters used for training each method in the maze and car racing environments.
+Parameter
+
+MiniGrid
+
+CarRacing
+
+0.995
+0.95
+256
+5
+1
+0.2
+32
+1e-4
+1e-5
+0.5
+yes
+no
+0.5
+0.0
+
+0.99
+0.9
+125
+8
+4
+0.2
+16
+3e-4
+1e-5
+0.5
+no
+yes
+0.5
+0.0
+
+PLR
+Replay rate, p
+Buffer size, K
+Scoring function
+Prioritization
+Temperature, β
+Staleness coefficient, ρ
+
+0.5
+4000
+MaxMC
+rank
+0.3
+0.3
+
+0.5
+8000
+positive value loss
+proportional
+1.0
+0.7
+
+PLR⊥
+Scoring function
+
+MaxMC
+
+positive value loss
+
+PAIRED
+Generator entropy coefficient
+
+0.0
+
+0.0
+
+REPAIRED
+Generator entropy coefficient
+Scoring function
+
+0.0
+MaxMC
+
+0.01
+MaxMC
+
+PPO
+γ
+λGAE
+PPO rollout length
+PPO epochs
+PPO minibatches per epoch
+PPO clip range
+PPO number of workers
+Adam learning rate
+Adam 
+PPO max gradient norm
+PPO value clipping
+Return normalization
+Value loss coefficient
+Student entropy coefficient
+
+D
+
+Experiment Details and Hyperparameters
+
+This section details the environments, agent architectures, and training procedures used in our
+experiments discussed in Section 6. We use PPO to train both student and generator policies in all
+experiments. Section 6 reports results for each method using the best hyperparameter settings, which
+we summarize in Figure 4. Note that unless specified, PPO hyperparameters are shared between
+student and teacher, and PLR hyperparameters are shared between REPAIRED and REPAIRED. The
+procedures for determining the hyperparameter choices for each environment are detailed below, in
+Sections D.1 and D.2.
+D.1
+
+Partially-Observable Navigation (MiniGrid)
+
+Environment details Our mazes are based on MiniGrid [7]. Each maze consists of a 15 × 15 grid,
+where each cell can contain a wall, the goal, the agent, or navigable space. The student agent receives
+a reward of 1 − T /Tmax upon reaching the goal, where T is the episode length and Tmax is the
+maximum episode length (set to 250). Otherwise, the agent receives a reward of 0 if it fails to reach
+the goal. The observation space consists of the agent’s orientation (facing north, south, east, or west)
+and the 7 × 7 grid immediately in front of and including the agent. This grid takes the form of a
+3-channel integer encoding. The action space consists of 7 total actions, though mazes only make use
+of the first three: turn left, turn right, and forward. We do not mask out irrelevant actions.
+Level generation Each maze is fully surrounded by walls, resulting in 13 × 13 = 169 cells in which
+the generator can place walls, the goal, and the agent. Starting from an initially empty maze (except
+the bordering walls), the generator is given a budget of W = 50 steps in which it can choose a grid
+cell in which to place a wall. Placing a wall in a cell already containing a wall results in a no-opt.
+24
+
+After wall placement, the generator then chooses cells for the goal and the agent’s starting position. If
+either of these cells collides with an existing wall, a random empty cell is chosen. At each time step,
+the generator teacher receives the full grid observation of the developing maze, the one-hot encoding
+of the current time step, as well as a 50-dimensional random noise vector, where each component is
+uniformly sampled from [0.0, 1.0].
+Generator architecture We base the generator architecture on the the original model used for
+the PAIRED adversary in [10]. This model encodes the full grid observation using a convolution
+layer (3 × 3 kernel, stride length 1, 128 filters) followed by a ReLU activation layer over the
+flattened convolution outputs. The current time step is embedded into a 10-dimensional space,
+which is concatenated to the grid embedding, along with the random noise vector. This combined
+representation is then passed through an LSTM with hidden dimension 256, followed by two fullyconnected layers, each with a hidden dimension 32 and ReLU activations, to produce the action
+logits over the 169 possible cell choices. We further ablated the LSTM and found that its absence
+preserves the performance of the minimax generator in both 25-block and 50-block settings, as well
+as that of the PAIRED generator in the 50-block setting, as expected given that the full grid and time
+step form a Markov state. However, the PAIRED generator struggles to learn without an LSTM
+in the 25-block setting. We believe PAIRED’s improved performance when using an LSTM-based
+generator in the 25-block setting is due to the additional network capacity provided by the LSTM.
+Therefore, in favor of less compute time, our experiments only used an LSTM-based generator for
+PAIRED in the 25-block setting.
+Student architecture The student policy architecture resembles the LSTM-based generator
+architecture, except the student model uses a convolution with 16 filters to embed its partial
+observation; does not use a random noise vector; and instead of embedding the time step, embeds the
+student’s current direction into a 5-dimensional latent space.
+Choice of hyperparameters We base our choice of hyperparameters for student agents and generator
+(i.e. the adversary) on [10]. We also performed a coarse grid search over the student entropy coefficient
+in {0.0, 0.01}, generator entropy coefficient in {0.0, 0.005, 0.01}, and number of PPO epochs in
+{5, 20} for both students and generator, as well as the choice of including an LSTM in the student and
+generator policies. We selected the best performing settings based on average return on the validation
+levels of SixteenRooms, Labyrinth, and Maze over 3 seeds. Our final choices are summarized
+in 4. The main deviations from the settings in [10] are the choice of removing the generator’s
+LSTM (except for PAIRED with 25 blocks) and using fewer PPO epochs (5 instead of 20). For
+PLR, we searched over replay rate, p, in {0.5, 0.95} and level buffer size, K, in {500, 2000, 4000},
+temperature β in {0.1, 0.3}, and choice of scoring function in {positive value loss, MaxMC}. The
+final PLR hyperparameter selection was then also used for PLR⊥ and REPAIRED, except for the
+scoring function, over which we conducted a separate search for each method.
+Zero-shot levels We make use of the challenging test mazes in [10]: SixteenRooms, requiring
+navigation through up to 16 rooms to find a goal; Labyrinth, requiring traversal of a spiral labyrinth;
+and Maze, requiring the agent to find a goal in a binary-tree maze, which requires the agent
+to successfully backtrack from dead ends. To more comprehensively test the agent’s zero-shot
+transfer performance on OOD classes of mazes, we introduce Labyrinth2, a rotated version of
+Labyrinth; Maze2, another variant of a binary-tree maze; PerfectMaze, a procedurally-generated
+maze environment; and LargeCorridor, another procedurally-generated maze environment, where the
+goal position is randomly chosen to lie at the end of one of the corridors, thereby testing the agent’s
+ability to perform backtracking. Figure 3 provides screenshots of these mazes.
+Compute All maze-navigating agents were trained using Tesla V100 GPUs. DR required
+approximately 40 hours to reach 250 million training steps; minimax, 50 hours; PLR variants,
+100 hours; and PAIRED variants, 160 hours. In total, our main experimental results, across 25-block
+and 50-block runs, required roughly 18,300 hours (around 763 days) of training.
+D.2
+
+CarRacing
+
+Environment details Each track consists of a closed loop around which the student agent must drive
+a full lap. In order to increase the expressiveness of the original CarRacing, we reparameterized the
+tracks using Bézier curves. In our experiments, each track consists of a Bézier curve [22] based on 12
+randomly sampled control points within a fixed radius, B/2, of the center of the B × B playfield. The
+25
+
+track consists of a sequence of L polygons. When driving over each previously unvisited polygon,
+the agent receives a reward equal to 1000/L. The student additionally receives a reward of -0.1 at
+each time step. Aligning with the methodology of [18], we do not penalize the agent for driving out
+of the playfield boundaries, terminate episodes if the agent drives too far off track, and repeat every
+selected action for 8 steps. The student observation space consists of a 96 × 96 × 3 pixel observation
+with RGB channels with a clipped, egocentric, bird’s-eye view of the vehicle centered horizontally
+in the top 84 × 96 portion of the frame. The remaining 12 × 96 portion of the frame consists of
+the dashboard visualizing the agent’s latest action and return. Note that despite the lossiness of the
+downsampled dashboard, our hyperparameter sweep for the best PPO settings found that including
+the full frame enabled better performance. Given this observation, the student then decides on a
+3-dimensional continuous action, where the components correspond to control values for steer (torque,
+in [−1.0, 1.0]), gas (acceleration, in [0.0, 1.0]), and brake (deceleration, in [0.0, 1.0]).
+Level generation Starting from an empty track, the adversary generates a sequence of 12 control
+points, one per time step, spaced within a fixed radius, B/2 of the center O of the playfield. The agent
+always begins centered at the track polygon closest to 0◦ relative to O, facing counterclockwise.
+Generator architecture At each time step, the generator policy receives the set of all control points
+so far generated, the current time step encoded as a one-hot vector, and a 16-dimensional random
+noise vector. The control points are spatially encoded in a 10 × 10 grid, called the sketch, representing
+a downsampled and discretized version of the playfield bounds within which the generated track
+resides. Choosing a control point then corresponds to selecting one of the cells in this grid. After the
+control points are chosen, each control point’s cell coordinates are upscaled to match the original
+playfield scale. This ensures no two control points are too close together, preventing areas of excessive
+track overlapping. The sketch is embedded using two 2 × 2 convolutions using a stride length of 1
+with 8 and 16 channels respectively, each followed by a ReLU layer. The flattened outputs of this
+sequence of convolutions is then concatenated with an 8-dimensional embedding of the time step and
+the random noise vector. This combined embedding is then fed through two fully connected layers,
+each with a hidden size of 256, where the first is followed by a ReLU activation, to produce the policy
+logits over the 100 choices of control points. Note that we mask out any cells in the sketch that have
+already been chosen to prevent double selection of the same control point. We also experimented with
+outputing continuous, downsampled control points in [0.0, 1.0] by learning the α and β parameters of
+a Beta distribution for each of x and y coordinates instead of categorical logits, but found this latter
+parameterization led to slower learning of generator policies, where the generator policy tended to
+remain close to or revert to an approximately uniformly random policy.
+Student architecture The student policy architecture is based on the competitive PPO
+implementation in [18], which was used as a baseline for AttentionAgent in [38]. This architecture
+consists of an image embedding module composed of a stack of 2D convolutions with square kernels
+of sizes 2, 2, 2, 2, 3, 3, channel outputs of 8, 16, 32, 64, 128, 256, and stride lengths of 2, 2, 2, 2,
+1, 1 respectively, resulting in a 256-dimensional image embedding. The image embedding is then
+passed through a fully connected layer with a hidden size of 100, followed by a ReLU layer. This
+latter output is then fed through two separate fully-connected layers, each with hidden size of 100 and
+output dimension equal to the action dimension, followed by softplus activations. We then add 1 to
+each component of these two output vectors, which serve as the α and β parameters respectively for
+the Beta distributions used to sample each action dimension. When training the student, we normalize
+rewards by dividing rewards by the running standard deviation of returns so far encountered.
+Choice of hyperparameters To determine the best hyperparameters for the student agents, we
+performed a grid search, in which we trained a student agent with domain randomization for 300
+PPO updates. The grid search covered PPO learning rate in {0.001, 0.0003}, λGAE in {0.0, 0.5, 0.9},
+number of PPO epochs in {4, 8}, PPO number of minibatches per epoch in {2, 4, 8}, value loss
+coefficient in {0.5, 2.0}, whether to grayscale frames, whether to crop frames (i.e remove the
+dashboard portion), and whether to normalize returns. Further, we found entropy regularization
+tended to hurt performance of the student policy. Similar to the sharing of PPO hyperparameters
+between student and generator in [10], we then shared the best PPO hyperparameters for the student
+with the generator, with the exception of searching over separate choices for the entropy coefficient
+in {0.0, 0.01}. We selected the best performing settings based on average return on the validation
+levels of F1-Italy, F1-Singapore, and F1-Germany over 3 seeds. For PLR, we searched over replay
+rate, p, in {0.5, 0.95}, level buffer size K, in {500, 2000, 4000, 8000}, replay prioritization in
+{rank, proportional}, staleness coefficient ρ in {0.3, 0.7}, and replay distribution temperature β in
+
+26
+
+{0.1, 1.0, 2.0}. The best settings for PLR were then shared with REPAIRED and REPAIRED, except
+for the scoring function, over which we performed a separate search for each method.
+Zero-shot levels Our zero-shot levels are based on 20 real-world Formula One (F1) tracks designed
+to challenge professional racecar drivers. We predominantly selected tracks based on recent F1
+seasons, including some historical favorites such as the Nürburgring Grand Prix.2 This collection of
+tracks, which we call CarRacing-F1, provides a new benchmark for testing robustness and zero-shot
+generalization in a continuous control setting. Importantly, these tracks are strictly out-of-distribution
+and of higher complexity with respect to the training levels, as they cannot be represented by Bézier
+curves limited to 12 control points. Moreover, each F1 track requires more time steps to solve (1500
+or 2000) than allotted for the training tracks (1000). Table 5 provides per-track descriptions, and
+Figure 19 shows bird’s-eye views of each track.
+Compute All car-racing agents were trained on Tesla V100 GPUs. DR and PLR variants required
+approximately 18 hours to reach 5 million training steps, while PAIRED variants, 24 hours. Our
+experiments in this domain entailed a total of roughly 9,600 hours (around 400 days) of training.
+Table 5: Descriptions for each track in the CarRacing-F1 benchmark.
+Environment
+
+Real-world track
+
+Max episode steps
+
+Australia
+Austria
+Bahrain
+Belgium
+Brazil
+China
+France
+Germany
+Hungary
+Italy
+Malaysia
+Mexico
+Monaco
+Netherlands
+Portugal
+Russia
+Singapore
+Spain
+UK
+USA
+
+Albert Park
+Red Bull Ring
+Bahrain International Circuit
+Circuit de Spa-Francorchamps
+Autódromo José Carlos Pace
+Shanghai International Circuit
+Circuit Paul Ricard
+Nürburgring
+Hungaroring
+Monza Circuit
+Sepang International Circuit
+Autódromo Hermanos Rodríguez
+Circuit de Monaco
+Circuit Zandvoort
+Algarve International Circuit
+Sochi Autodrom
+Marina Bay Street Circuit
+Circuit de Barcelona-Catalunya
+Silverstone
+Circuit of the Americas, Austin
+
+2
+
+1500
+1500
+2500
+1500
+2000
+2500
+2000
+2000
+2000
+1500
+2500
+2000
+1500
+2000
+2500
+1500
+2000
+2000
+2000
+2000
+
+We chose not to include the Japanese and Canadian Grand Prix due to the overlapping tracks at Suzuka and
+the Circuit Gilles Villeneuve.
+
+27
+
+(a) DR
+
+(b) PAIRED
+
+(c) REPAIRED
+
+(d) PLR
+
+(e) PLR⊥
+
+Figure 18: A randomly-selected set of CarRacing tracks generated by each method. (a) Domain Randomization
+(DR) produces tracks of average complexity, with few sharp turns. (b) PAIRED often overexploits the difference
+in the students, leading to simple tracks that incidentally favor the antagonist. (c) REPAIRED mitigates this
+degeneracy, recovering track complexity. (d) PLR and (e) PLR⊥ similarly generate tracks of considerable
+complexity, by prioritizing the most challenging randomly generated tracks.
+28
+
+(a) Australia
+
+(b) Austria
+
+(c) Bahrain
+
+(d) Belgium
+
+(e) Brazil
+
+(f) China
+
+(g) France
+
+(h) Germany
+
+(i) Hungary
+
+(j) Italy
+
+(k) Malaysia
+
+(l) Monaco
+
+(m) Mexico
+
+(n) Netherlands
+
+(o) Portugal
+
+(p) Russia
+
+(q) Singapore
+
+(r) Spain
+
+(s) UK
+
+(t) USA
+
+Figure 19: All tracks in the CarRacing-F1 benchmark used for evaluating zero-shot generalization.
+
+29
+
+

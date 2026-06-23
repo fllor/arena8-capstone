@@ -91,6 +91,10 @@ class PLRConfig:
     log_every: int = 1
     eval_fn: Callable[[ActorCriticNetwork, int], dict[str, float]] | None = None
     eval_every: int = 0
+    # write `net.state_dict()` to `checkpoint_path` every `checkpoint_every`
+    # steps (0 disables) so an unattended run loses at most that many steps.
+    checkpoint_path: str | None = None
+    checkpoint_every: int = 0
     wandb_project: str | None = None
     wandb_run_name: str | None = None
 
@@ -143,6 +147,8 @@ def train_agent_plr(
     log_every = config.log_every
     eval_fn = config.eval_fn
     eval_every = config.eval_every
+    checkpoint_path = config.checkpoint_path
+    checkpoint_every = config.checkpoint_every
     wandb_project = config.wandb_project
     wandb_run_name = config.wandb_run_name
 
@@ -259,6 +265,13 @@ def train_agent_plr(
                             "urns": metrics.get("buffer/mean_urns", 0.0),
                         }
                     )
+            if (
+                checkpoint_path
+                and checkpoint_every
+                and step > 0
+                and step % checkpoint_every == 0
+            ):
+                torch.save(net.state_dict(), checkpoint_path)
     finally:
         if wandb_run is not None:
             wandb_run.finish()

@@ -63,13 +63,12 @@ def default_device() -> torch.device:
 def _buffer_stats(sampler: LevelSampler | None) -> dict[str, float]:
     """Buffer-composition diagnostics (the 'is it learning to build walls?' view)."""
     if sampler is None or sampler.size == 0:
-        return {"buffer/size": 0}
+        return {}
     n = sampler.size
     items = sampler.levels.init_items_map[:n]
     urns = (items == Item.URN).flatten(1).sum(1).float()
     scores = sampler.scores[:n]
     return {
-        "buffer/size": float(n),
         "buffer/mean_score": scores.mean().item(),
         "buffer/max_score": scores.max().item(),
         "buffer/mean_urns": urns.mean().item(),
@@ -93,9 +92,8 @@ def _progress_postfix(
     """tqdm postfix: return + branch/buffer state (PLR) or diagnostic regret (DR)."""
     postfix: dict[str, object] = {"return": metrics.get("ppo/return", 0.0)}
     if sampler is not None:
-        postfix["branch"] = "replay" if replay else "gen"
-        postfix["buf"] = sampler.size
-        postfix["urns"] = metrics.get("buffer/mean_urns", 0.0)
+        postfix["cycle"] = "replay  " if replay else "generate"
+        postfix["buf/urns"] = metrics.get("buffer/mean_urns", 0.0)
     else:
         postfix["regret"] = metrics.get("regret", 0.0)
     return postfix
@@ -213,53 +211,43 @@ class UEDConfig:
       only (subsampled per `dr_diag_frac`/`dr_diag_every`).
     """
 
-    gen: Callable[..., Environment]
-    net: ActorCriticNetwork
-    reward_fn: RewardFunction
-    num_train_steps: int = 4096
-    num_envs: int = 256
-    num_env_steps: int = 64
-    num_epochs: int = 1
-    num_minibatches : int = 32
-    minibatch_size: int = 0  # auto compute
-    discount_rate: float = DISCOUNT_RATE
-    entropy_coeff: float = 0.01
-    lr: float = 0.003
-    device: torch.device | str | None = None
-    seed: int = 1
-    progress: bool = True
+    gen: Callable[..., Environment]             # function to generate new environments
+    net: ActorCriticNetwork                     # agent
+    reward_fn: RewardFunction                   # reward function
+    num_train_steps: int = 4096                 # number of training cycles
+    num_envs: int = 256                         # batch size
+    num_env_steps: int = 64                     # episode length
+    num_epochs: int = 1                         # how many PPO training epochs
+    num_minibatches : int = 32                  # number of minibatches
+    minibatch_size: int = 0                     # minibatch size (populated automatically)
+    discount_rate: float = DISCOUNT_RATE        # reward discount factor
+    entropy_coeff: float = 0.01                 # coefficient of entropy loss term
+    lr: float = 0.003                           # learning rate
+    device: torch.device | str | None = None    # compute device
+    seed: int = 1                               # RNG seed
     # --- curriculum mode knobs ---
-    train_on_generate: bool = False
-    buffer_active: bool | None = None  # auto: replay_prob > 0 (see __post_init__)
-    # --- PLR buffer knobs (ignored when the buffer is inactive) ---
-    buffer_capacity: int = 4096
-    replay_prob: float = 0.5
-    staleness_coeff: float = 0.1
-    temperature: float = 0.1
-    minimum_fill_ratio: float = 0.5
-    duplicate_check: bool = True
+    train_on_generate: bool = False     # do gradient update on generate cycle
+    # --- PLR buffer  ---
+    buffer_active: bool | None = None   # use buffer (populated automatically)
+    buffer_capacity: int = 4096         # maximum buffer capacity
+    replay_prob: float = 0.5            # probability of replay cycle
+    staleness_coeff: float = 0.1        # weight of staleness term
+    temperature: float = 0.1            # temperature for sampling levels
+    minimum_fill_ratio: float = 0.5     # fill buffer before allowing replay cycles
+    duplicate_check: bool = True        # check for duplicates in buffer
     # --- DR diagnostic oracle solve (only used when the buffer is inactive) ---
-    # In pure DR the buffer is inert, so the oracle solve is purely diagnostic
-    # (drives the `regret` curve, nothing trains on it). To keep DR fast it is
-    # subsampled to `dr_diag_frac` of the batch and run only every `dr_diag_every`
-    # steps. In PLR the solve is mandatory (buffer admission) and runs every
-    # generate step regardless -- these knobs do nothing there.
-    dr_diag_frac: float = 0.1
-    dr_diag_every: int = 10
+    dr_diag_every: int = 10             # how often to compute regret
+    dr_diag_frac: float = 0.1           # fraction of environments to compute regret for
     # --- eval ---
-    # Held-out eval populations ({name: Environment}, e.g. random + urn-walls).
-    # When set, `train_agent` solves their oracle optima once up front and logs
-    # the full `compute_eval_metrics` keyset every `eval_every` steps. None / 0
-    # disables held-out eval.
-    eval_sets: dict[str, Environment] | None = None
-    eval_every: int = 10
-    eval_solved_eps: float = 0.05   # regret tolerance for determining solved status
-    # write `net.state_dict()` to `checkpoint_path` every `checkpoint_every` steps
-    # (0 disables) so an unattended run loses at most that many steps.
-    checkpoint_path: str | None = None
-    checkpoint_every: int = 0
-    wandb_project: str | None = None
-    wandb_run_name: str | None = None
+    eval_sets: dict[str, Environment] | None = None # Held-out eval populations
+    eval_every: int = 10                # how often to compute eval metrics
+    eval_solved_eps: float = 0.05       # regret tolerance for determining solved status
+    # --- checkpoint ---
+    checkpoint_path: str | None = None  # path to save checkpoint during training
+    checkpoint_every: int = 0           # how often to save checkpoint
+    # --- weights and biases logging ---
+    wandb_project: str | None = None    # project name
+    wandb_run_name: str | None = None   # run name
 
     def __post_init__(self) -> None:
         # The buffer is engaged exactly when there is something to replay. Derive
@@ -394,7 +382,7 @@ def train_agent(
     history: list[dict[str, float]] = []
     num_generate = 0
     num_replay = 0
-    steps = tqdm(range(config.num_train_steps)) if config.progress else range(config.num_train_steps)
+    steps = tqdm(range(config.num_train_steps))
     try:
         for step in steps:
             replay = buffer_active and sampler.sample_replay_decision()
@@ -449,12 +437,11 @@ def train_agent(
                     solved_eps=config.eval_solved_eps,
                 ))
                 line = _eval_summary_line(step, metrics, config.eval_sets)
-                tqdm.write(line) if config.progress else print(line, flush=True)
+                tqdm.write(line)
             history.append(metrics)
             if wandb_run is not None:
                 wandb_run.log(metrics, step=step)
-            if config.progress:
-                steps.set_postfix(_progress_postfix(metrics, sampler, replay))
+            steps.set_postfix(_progress_postfix(metrics, sampler, replay))
             if (
                 config.checkpoint_path
                 and config.checkpoint_every

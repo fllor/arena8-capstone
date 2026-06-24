@@ -21,6 +21,7 @@ steps (~`replay_prob` of them), so PLR runs `1/replay_prob`x more steps.
 
 # %%
 
+import sys
 import functools
 
 import matplotlib.pyplot as plt
@@ -41,16 +42,29 @@ print(f"using device: {device}")
 # %%
 # Configuration
 
-# Which curriculum to run. DR vs PLR-bot is the core comparison; "plr_plain" is a
-# non-robust ablation. Each entry is just the two curriculum knobs on UEDConfig --
-# everything else below is shared, so the comparison is clean.
-METHOD = "dr"  # "dr" | "plr" | "plr_plain"
+# Which curriculum to run. DR vs robust PLR
+METHOD = "dr"  # "dr" | "plr50"
+# Number of gradient updates (DR equivalent)
+# ~1 min / 100 steps for DR
+NUM_GRAD_UPDATES = 500
+
+if len(sys.argv) > 1:
+    METHOD = sys.argv[1]
+if len(sys.argv) > 2:
+    NUM_GRAD_UPDATES = int(sys.argv[2])
+
 CURRICULA = {
-    "dr": dict(replay_prob=0.0, train_on_generate=True),
-    "plr": dict(replay_prob=0.5, train_on_generate=False),  # PLR-bot (stop-grad)
-    "plr_plain": dict(replay_prob=0.5, train_on_generate=True),
+    "dr":    dict(replay_prob=0.00, train_on_generate=True,  wandb_run_name=f"dr_{NUM_GRAD_UPDATES}"),
+    "plr50": dict(replay_prob=0.50, train_on_generate=False, wandb_run_name=f"plr_p50_{NUM_GRAD_UPDATES}"),
+    "plr75": dict(replay_prob=0.75, train_on_generate=False, wandb_run_name=f"plr_p75_{NUM_GRAD_UPDATES}"),
+    "plr25": dict(replay_prob=0.25, train_on_generate=False, wandb_run_name=f"plr_p25_{NUM_GRAD_UPDATES}"),
+    #"plr_plain": dict(replay_prob=0.5, train_on_generate=True),
 }
+assert METHOD in CURRICULA
+assert NUM_GRAD_UPDATES > 0
 curriculum = CURRICULA[METHOD]
+RUN_NAME = curriculum["wandb_run_name"]
+print("Run:", RUN_NAME)
 
 # Mean shard/urn COUNT per env (each floored at 1, drawn from a truncated
 # geometric — most layouts stay sparse, dense urn-walls keep a small non-zero
@@ -70,7 +84,7 @@ elif world_size == 5:
 # Where to save/load the trained network (per-method so DR and PLR don't clobber
 # each other). Set LOAD_AGENT = True to skip training and load weights instead
 # (the architecture below must match the one the file was saved from).
-MODEL_PATH = f"agent_{METHOD}.pt"
+MODEL_PATH = f"agent_{RUN_NAME}.pt"
 LOAD_AGENT = False
 
 # Optional Weights & Biases logging. Set WANDB_PROJECT to a project name to log
@@ -108,17 +122,16 @@ eval_sets = build_eval_sets(world_size, shard_mean, urn_mean)
 # Equal gradient-update budget across methods: DR updates every step, PLR only on
 # its replay steps. Scale the step count by 1/replay_prob so both take the same
 # number of PPO updates (the fair DR-vs-PLR comparison; see module docstring).
-GRAD_COLLECTIONS = 100  # ~1 min / 100 steps for DR
 replay_prob = curriculum["replay_prob"]
 num_train_steps = (
-    GRAD_COLLECTIONS if replay_prob == 0 else round(GRAD_COLLECTIONS / replay_prob)
+    NUM_GRAD_UPDATES if replay_prob == 0 else round(NUM_GRAD_UPDATES / replay_prob)
 )
 
 config = UEDConfig(
     gen=gen,
     net=net,
     reward_fn=reward2,
-    num_train_steps=num_train_steps,
+    num_train_steps=num_train_steps+1,  # +1 to compute final metrics
     num_envs=8192,
     num_env_steps=64,
     num_epochs=1,
@@ -128,7 +141,7 @@ config = UEDConfig(
     seed=1,
     eval_sets=eval_sets,
     wandb_project=WANDB_PROJECT,
-    wandb_run_name=METHOD,
+    #wandb_run_name=METHOD,
     **curriculum,
 )
 
@@ -190,9 +203,9 @@ if history is not None:
 if history is not None:
     fig, ax = plt.subplots(figsize=(7, 4))
     for key, label in [
-        ("eval/random/greedy/regret", "random regret"),
-        ("eval/walls/greedy/regret", "urn-wall regret"),
-        ("eval/walls/greedy/break", "urn-wall break-rate"),
+        ("eval/random/stochasic/regret", "random regret"),
+        ("eval/walls/stochasic/regret", "urn-wall regret"),
+        ("eval/walls/stochasic/break", "urn-wall break-rate"),
     ]:
         xs, ys = series(key)
         if xs:

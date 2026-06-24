@@ -65,7 +65,7 @@ def ppo_train_step_multienv(
     and minibatch SGD are skipped entirely). This is the stop-gradient path
     PLR-bot needs for newly-generated levels -- the policy must not learn from
     them, only have its regret on them measured. The returned metrics then carry
-    just the rollout `"return"` (no loss/diagnostics).
+    just the rollout `"ppo/return"` (no loss/diagnostics).
     """
     assert envs.num_envs is not None, (
         "got a single environment; add a batch dimension to the environment "
@@ -97,7 +97,7 @@ def ppo_train_step_multienv(
     # report the achieved per-env return so the caller can compute regret.
     if not update:
         returns_per_env = compute_return(rewards, discount_rate)
-        return {"return": returns_per_env.mean().item()}, returns_per_env
+        return {"ppo/return": returns_per_env.mean().item()}, returns_per_env
 
     # estimate advantages on the collected experience...
     advantages = generalised_advantage_estimation(
@@ -155,8 +155,8 @@ def ppo_train_step_multienv(
     # optimum (e.g. for regret) on the same rollout.
     returns_per_env = compute_return(rewards, discount_rate)
     train_metrics = {
-        "loss": loss_sum / num_updates,
-        "return": returns_per_env.mean().item(),
+        "ppo/loss": loss_sum / num_updates,
+        "ppo/return": returns_per_env.mean().item(),
         **{k: v / num_updates for k, v in aux_sum.items()},
     }
     return train_metrics, returns_per_env
@@ -239,13 +239,13 @@ def ppo_loss_fn(
     return (
         total_loss,
         {
-            "loss-actor": actor_loss.item(),
-            "loss-critic": critic_loss.item(),
-            "entropy": average_entropy.item(),
-            "actor-clip": actor_clipfrac.item(),
-            "critic-clip": critic_clipfrac.item(),
-            "actor-kl1": actor_approxkl1.item(),
-            "actor-kl3": actor_approxkl3.item(),
+            "ppo/loss-actor": actor_loss.item(),
+            "ppo/loss-critic": critic_loss.item(),
+            "ppo/entropy": average_entropy.item(),
+            "ppo/actor-clip": actor_clipfrac.item(),
+            "ppo/critic-clip": critic_clipfrac.item(),
+            "ppo/actor-kl1": actor_approxkl1.item(),
+            "ppo/actor-kl3": actor_approxkl3.item(),
         },
     )
 

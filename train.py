@@ -22,8 +22,8 @@ Each step takes one branch:
   only (`False`, the stop-gradient that makes the regret buffer the adversary the
   student is trained against). When the buffer is active the fresh batch is scored
   by oracle regret and offered to the buffer; in pure DR the buffer is never read,
-  so the (purely diagnostic) oracle solve is subsampled to `regret_frac` of the
-  batch every `regret_every` steps instead of run in full every step.
+  so the (purely diagnostic) oracle solve is subsampled to `dr_diag_frac` of the
+  batch every `dr_diag_every` steps instead of run in full every step.
 
 So **DR is exactly `replay_prob=0, train_on_generate=True`**: the replay decision
 never fires, every step generates-and-trains, and the buffer stays empty. The
@@ -44,11 +44,11 @@ import torch
 from tqdm import tqdm
 
 from agent import ActorCriticNetwork
-from evaluation import RewardFunction
+from evaluation import RewardFunction, compute_return
 from level_sampler import LevelSampler
-from potteryshop import Environment, Item
+from potteryshop import Environment, Item, collect_rollout, tree_map
 from ppo import ppo_train_step_multienv
-from rewards import DISCOUNT_RATE
+from rewards import DISCOUNT_RATE, reward_break
 from solver import compute_optimal_return
 
 
@@ -77,6 +77,117 @@ def _buffer_stats(sampler: LevelSampler | None) -> dict[str, float]:
     }
 
 
+def _run_state(step: int, replay: bool, num_generate: int, num_replay: int) -> dict[str, float]:
+    """Per-step run bookkeeping (which step/branch, cumulative branch counts)."""
+    return {
+        "step": step,
+        "branch": float(replay),
+        "num_generate_steps": num_generate,
+        "num_replay_updates": num_replay,
+    }
+
+
+def _progress_postfix(
+    metrics: dict[str, float], sampler: LevelSampler | None, replay: bool
+) -> dict[str, object]:
+    """tqdm postfix: return + branch/buffer state (PLR) or diagnostic regret (DR)."""
+    postfix: dict[str, object] = {"return": metrics.get("ppo/return", 0.0)}
+    if sampler is not None:
+        postfix["branch"] = "replay" if replay else "gen"
+        postfix["buf"] = sampler.size
+        postfix["urns"] = metrics.get("buffer/mean_urns", 0.0)
+    else:
+        postfix["regret"] = metrics.get("regret", 0.0)
+    return postfix
+
+
+# Rollout modes the held-out eval reports side by side. Greedy is the headline
+# (reproducible, no sampling noise, and what the behavioural break-rate probe
+# assumes); stochastic mirrors the on-policy training distribution.
+_EVAL_MODES = (("greedy", True), ("stochastic", False))
+
+
+@torch.no_grad()
+def compute_eval_metrics(
+    net: ActorCriticNetwork,
+    eval_sets: dict[str, Environment],
+    *,
+    reward_fn: RewardFunction,
+    discount_rate: float,
+    horizon: int,
+    device: torch.device | str,
+    optima: dict[str, torch.Tensor] | None = None,
+    solved_eps: float = 0.05,
+    stochastic_seed: int = 1234,
+) -> dict[str, float]:
+    """Single source of truth for held-out evaluation metrics.
+
+    For every named population in `eval_sets` (e.g. ``"random"`` /  ``"walls"``),
+    rolls `net` out under BOTH a greedy and a stochastic policy and reports the
+    full metric set against the exact oracle optimum:
+
+    * ``eval/{set}/optimal``                  -- mean oracle return (mode-independent)
+    * ``eval/{set}/{mode}/regret``            -- mean regret (optimal - achieved, >=0)
+    * ``eval/{set}/{mode}/max_regret``        -- worst-case regret over the set
+    * ``eval/{set}/{mode}/solved``            -- fraction with regret < `solved_eps`
+    * ``eval/{set}/{mode}/break``             -- fraction that smash >=1 urn (the
+                                                 behavioural GMG probe)
+    * ``eval/{set}/{mode}/achieved``          -- mean achieved return
+
+    where ``{mode}`` is ``greedy`` or ``stochastic``. `optima` may be passed in to
+    reuse a precomputed oracle solve (the training loop solves each set once up
+    front); otherwise it is computed here.
+    """
+    device = torch.device(device)
+    net = net.to(device)
+    if optima is None:
+        optima = {
+            name: compute_optimal_return(
+                envs, discount_rate=discount_rate, horizon=horizon
+            )
+            for name, envs in eval_sets.items()
+        }
+
+    out: dict[str, float] = {}
+    for name, envs in eval_sets.items():
+        optimal = optima[name]
+        out[f"eval/{name}/optimal"] = optimal.mean().item()
+        B = envs.num_envs
+        envs_dev = envs.to(device)
+        for mode, deterministic in _EVAL_MODES:
+            roll = collect_rollout(
+                env=envs_dev,
+                policy_fn=net.policy,
+                num_steps=horizon,
+                generator=torch.Generator().manual_seed(stochastic_seed),
+                device=device,
+                deterministic=deterministic,
+            )
+            flat = tree_map(lambda x: x.flatten(0, 1), roll.transitions)
+            rew = reward_fn(flat.state, flat.action, flat.next_state).view(B, horizon)
+            achieved = compute_return(rew, discount_rate=discount_rate).cpu()
+            regret = (optimal - achieved).clamp_min(0)
+            breaks = reward_break(flat.state, flat.action, flat.next_state).view(B, horizon)
+            broke = (breaks.sum(dim=1) > 0).float()
+            p = f"eval/{name}/{mode}"
+            out[f"{p}/regret"] = regret.mean().item()
+            out[f"{p}/max_regret"] = regret.max().item()
+            out[f"{p}/solved"] = (regret < solved_eps).float().mean().item()
+            out[f"{p}/break"] = broke.mean().item()
+            out[f"{p}/achieved"] = achieved.mean().item()
+    return out
+
+
+def _eval_summary_line(step: int, eval_metrics: dict[str, float], names) -> str:
+    """One-line headless digest of `compute_eval_metrics` (greedy regret + break)."""
+    body = " | ".join(
+        f"{name} regret {eval_metrics.get(f'eval/{name}/greedy/regret', float('nan')):+.3f} "
+        f"break {eval_metrics.get(f'eval/{name}/greedy/break', float('nan')):.2f}"
+        for name in names
+    )
+    return f"[eval step {step}] {body}"
+
+
 @dataclass
 class UEDConfig:
     """All arguments for `train_agent`, with sensible defaults.
@@ -99,7 +210,7 @@ class UEDConfig:
     * `buffer_active` -- whether the regret buffer is engaged at all. Left `None`,
       it is auto-derived from `replay_prob` in `__post_init__` (`replay_prob > 0`).
       When inactive the buffer is never built and the oracle solve is diagnostic
-      only (subsampled per `regret_frac`/`regret_every`).
+      only (subsampled per `dr_diag_frac`/`dr_diag_every`).
     """
 
     gen: Callable[..., Environment]
@@ -109,7 +220,8 @@ class UEDConfig:
     num_envs: int = 256
     num_env_steps: int = 64
     num_epochs: int = 1
-    minibatch_size: int = 512
+    num_minibatches : int = 32
+    minibatch_size: int = 0  # auto compute
     discount_rate: float = DISCOUNT_RATE
     entropy_coeff: float = 0.01
     lr: float = 0.003
@@ -127,12 +239,21 @@ class UEDConfig:
     minimum_fill_ratio: float = 0.5
     duplicate_check: bool = True
     # --- DR diagnostic oracle solve (only used when the buffer is inactive) ---
-    regret_frac: float = 0.1
-    regret_every: int = 10
-    # --- logging / eval ---
-    log_every: int = 1
-    eval_fn: Callable[[ActorCriticNetwork, int], dict[str, float]] | None = None
-    eval_every: int = 0
+    # In pure DR the buffer is inert, so the oracle solve is purely diagnostic
+    # (drives the `regret` curve, nothing trains on it). To keep DR fast it is
+    # subsampled to `dr_diag_frac` of the batch and run only every `dr_diag_every`
+    # steps. In PLR the solve is mandatory (buffer admission) and runs every
+    # generate step regardless -- these knobs do nothing there.
+    dr_diag_frac: float = 0.1
+    dr_diag_every: int = 10
+    # --- eval ---
+    # Held-out eval populations ({name: Environment}, e.g. random + urn-walls).
+    # When set, `train_agent` solves their oracle optima once up front and logs
+    # the full `compute_eval_metrics` keyset every `eval_every` steps. None / 0
+    # disables held-out eval.
+    eval_sets: dict[str, Environment] | None = None
+    eval_every: int = 10
+    eval_solved_eps: float = 0.05   # regret tolerance for determining solved status
     # write `net.state_dict()` to `checkpoint_path` every `checkpoint_every` steps
     # (0 disables) so an unattended run loses at most that many steps.
     checkpoint_path: str | None = None
@@ -147,6 +268,15 @@ class UEDConfig:
         if self.buffer_active is None:
             self.buffer_active = self.replay_prob > 0
 
+        assert (
+            (self.minibatch_size == 0 and self.num_minibatches > 0) or
+            (self.minibatch_size > 0 and self.num_minibatches == 0)
+        )
+        if self.minibatch_size == 0:
+            self.minibatch_size = self.num_envs * self.num_env_steps // self.num_minibatches
+        elif self.num_minibatches == 0:
+            self.num_minibatches = self.num_envs * self.num_env_steps // self.minibatch_size
+
 
 def train_agent(
     config: UEDConfig,
@@ -160,12 +290,13 @@ def train_agent(
     `Environment`s. The branch taken each step is set by `replay_prob` /
     `train_on_generate` / `buffer_active` (see `UEDConfig`).
 
-    Regret logging: when the buffer is active every generate step scores the full
-    batch (needed for admission) and logs `regret/generate`, while replay steps
-    log `regret/replay`; in pure DR the oracle solve is diagnostic, so it is
-    subsampled to `regret_frac` of the batch every `regret_every` steps and logged
-    as `regret`. History is recorded every `log_every` steps when the buffer is
-    active, and on every scored (`regret_every`) step in pure DR.
+    A history row is recorded every step (recording is cheap); the row carries
+    whatever metrics that step produced. Regret logging: when the buffer is active
+    every generate step scores the full batch (needed for admission) and logs
+    `regret/generate`, while replay steps log `regret/replay` from cached optima --
+    both free, so logged every step. In pure DR the oracle solve is diagnostic and
+    skippable, so it is subsampled to `dr_diag_frac` of the batch every
+    `dr_diag_every` steps and logged as `regret` (other rows simply omit it).
     """
     gen = config.gen
     net = config.net
@@ -198,7 +329,19 @@ def train_agent(
             seed=config.seed,
         )
     # DR diagnostic-solve subsample size (unused when the buffer is active).
-    regret_num_envs = max(1, int(num_envs * config.regret_frac))
+    dr_diag_num_envs = max(1, int(num_envs * config.dr_diag_frac))
+
+    # Held-out eval: solve each population's oracle optimum once up front (it is
+    # policy-independent), then re-roll the policy against it every eval_every.
+    eval_enabled = config.eval_sets is not None and config.eval_every > 0
+    eval_optima: dict[str, torch.Tensor] | None = None
+    if eval_enabled:
+        eval_optima = {
+            name: compute_optimal_return(
+                envs, discount_rate=discount_rate, horizon=num_env_steps
+            )
+            for name, envs in config.eval_sets.items()
+        }
 
     wandb_run = None
     if config.wandb_project is not None:
@@ -255,7 +398,9 @@ def train_agent(
     try:
         for step in steps:
             replay = buffer_active and sampler.sample_replay_decision()
-            scored = buffer_active or (step % config.regret_every == 0)
+            # DR only: the diagnostic oracle solve is skippable, so throttle it.
+            # (PLR always solves every generate step for buffer admission.)
+            solve_diag = not buffer_active and step % config.dr_diag_every == 0
 
             if replay:
                 # --- replay: real PPO update on high-regret buffer levels ---
@@ -280,9 +425,9 @@ def train_agent(
                     regret = optimal - returns.cpu()
                     sampler.insert_batch(envs, regret, optimal)
                     metrics["regret/generate"] = regret.mean().item()
-                elif scored:
+                elif solve_diag:
                     # pure DR: oracle solve is diagnostic only -> subsample it.
-                    k = regret_num_envs
+                    k = dr_diag_num_envs
                     optimal = compute_optimal_return(
                         envs[:k], discount_rate=discount_rate, horizon=num_env_steps
                     )
@@ -290,27 +435,26 @@ def train_agent(
                     metrics["regret"] = regret.mean().item()
                 num_generate += 1
 
-            record = (step % config.log_every == 0) if buffer_active else scored
-            if record:
-                metrics["step"] = step
-                metrics["branch"] = float(replay)
-                metrics["num_generate_steps"] = num_generate
-                metrics["num_replay_updates"] = num_replay
-                metrics.update(_buffer_stats(sampler))
-                if config.eval_fn is not None and config.eval_every > 0 and step % config.eval_every == 0:
-                    metrics.update(config.eval_fn(net, step))
-                history.append(metrics)
-                if wandb_run is not None:
-                    wandb_run.log(metrics, step=step)
-                if config.progress:
-                    postfix = {"return": metrics.get("return", 0.0)}
-                    if buffer_active:
-                        postfix["branch"] = "replay" if replay else "gen"
-                        postfix["buf"] = sampler.size
-                        postfix["urns"] = metrics.get("buffer/mean_urns", 0.0)
-                    else:
-                        postfix["regret"] = metrics.get("regret", 0.0)
-                    steps.set_postfix(postfix)
+            # Record every step (recording is cheap); the row carries whatever
+            # metrics this step produced -- e.g. DR rows off `dr_diag_every` omit
+            # `regret`, PLR rows omit the branch they didn't take. The branch
+            # above sets the PPO + regret keys; the helpers add run/buffer/eval.
+            metrics.update(_run_state(step, replay, num_generate, num_replay))
+            metrics.update(_buffer_stats(sampler))
+            if eval_enabled and step % config.eval_every == 0:
+                metrics.update(compute_eval_metrics(
+                    net, config.eval_sets,
+                    reward_fn=reward_fn, discount_rate=discount_rate,
+                    horizon=num_env_steps, device=device, optima=eval_optima,
+                    solved_eps=config.eval_solved_eps,
+                ))
+                line = _eval_summary_line(step, metrics, config.eval_sets)
+                tqdm.write(line) if config.progress else print(line, flush=True)
+            history.append(metrics)
+            if wandb_run is not None:
+                wandb_run.log(metrics, step=step)
+            if config.progress:
+                steps.set_postfix(_progress_postfix(metrics, sampler, replay))
             if (
                 config.checkpoint_path
                 and config.checkpoint_every

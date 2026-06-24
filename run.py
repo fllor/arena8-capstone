@@ -28,7 +28,7 @@ import torch
 
 import visualise
 from agent import ActorCriticNetwork
-from evalsuite import make_eval_fn
+from evalsuite import build_eval_sets
 from generate import generate
 from potteryshop import Action, Item
 from rewards import reward2
@@ -44,7 +44,7 @@ print(f"using device: {device}")
 # Which curriculum to run. DR vs PLR-bot is the core comparison; "plr_plain" is a
 # non-robust ablation. Each entry is just the two curriculum knobs on UEDConfig --
 # everything else below is shared, so the comparison is clean.
-METHOD = "plr"  # "dr" | "plr" | "plr_plain"
+METHOD = "dr"  # "dr" | "plr" | "plr_plain"
 CURRICULA = {
     "dr": dict(replay_prob=0.0, train_on_generate=True),
     "plr": dict(replay_prob=0.5, train_on_generate=False),  # PLR-bot (stop-grad)
@@ -101,12 +101,14 @@ net = ActorCriticNetwork.init(
 
 # %% Train (or load a saved agent instead)
 
-eval_fn = make_eval_fn(gen, device)
+# Held-out eval populations (in-distribution random + hand-built urn-walls).
+# `train_agent` scores these with `compute_eval_metrics` every `eval_every` steps.
+eval_sets = build_eval_sets(world_size, shard_mean, urn_mean)
 
 # Equal gradient-update budget across methods: DR updates every step, PLR only on
 # its replay steps. Scale the step count by 1/replay_prob so both take the same
 # number of PPO updates (the fair DR-vs-PLR comparison; see module docstring).
-GRAD_COLLECTIONS = 300  # ~3 min for DR
+GRAD_COLLECTIONS = 100  # ~1 min / 100 steps for DR
 replay_prob = curriculum["replay_prob"]
 num_train_steps = (
     GRAD_COLLECTIONS if replay_prob == 0 else round(GRAD_COLLECTIONS / replay_prob)
@@ -120,13 +122,11 @@ config = UEDConfig(
     num_envs=8192,
     num_env_steps=64,
     num_epochs=1,
-    minibatch_size=16384,  # 32 gradient updates per collection
+    num_minibatches=32,
     lr=0.003,  # large batch permits greater learning rate
     device=device,
     seed=1,
-    log_every=10,
-    eval_fn=eval_fn,
-    eval_every=50,
+    eval_sets=eval_sets,
     wandb_project=WANDB_PROJECT,
     wandb_run_name=METHOD,
     **curriculum,
@@ -144,10 +144,12 @@ else:
 
 # %%
 # Plot training curves.
-# History is sparse (one entry per logged step, each tagged
-# with its true `step` index). DR logs return/loss/regret/entropy on its scored
-# steps; PLR logs branch-split regret + buffer composition (the buffer's mean urn
-# count climbing is PLR learning to prefer walls).
+# A row is recorded every step (tagged with its `step` index), but rows carry
+# different keys, so `series()` skips entries missing a key. DR plots
+# ppo/return + ppo/loss + ppo/entropy (every step) and regret (only on the
+# subsampled `dr_diag_every` diagnostic steps); PLR plots branch-split regret +
+# buffer composition (the buffer's mean urn count climbing is PLR learning to
+# prefer walls).
 
 
 def series(key):
@@ -167,10 +169,10 @@ if history is not None:
         ]
     else:  # DR: the classic return/loss/regret/entropy panels
         panels = [
-            ("return", "mean discounted return"),
-            ("loss", "PPO loss"),
+            ("ppo/return", "mean discounted return"),
+            ("ppo/loss", "PPO loss"),
             ("regret", "mean oracle regret"),
-            ("entropy", "policy entropy"),
+            ("ppo/entropy", "policy entropy"),
         ]
     fig, axes = plt.subplots(len(panels), 1, figsize=(7, 9), sharex=True)
     for ax, (key, label) in zip(axes, panels):
@@ -188,8 +190,9 @@ if history is not None:
 if history is not None:
     fig, ax = plt.subplots(figsize=(7, 4))
     for key, label in [
-        ("eval/random_regret", "random regret"),
-        ("eval/wall_regret", "urn-wall regret"),
+        ("eval/random/greedy/regret", "random regret"),
+        ("eval/walls/greedy/regret", "urn-wall regret"),
+        ("eval/walls/greedy/break", "urn-wall break-rate"),
     ]:
         xs, ys = series(key)
         if xs:

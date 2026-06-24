@@ -23,21 +23,17 @@ import argparse
 import functools
 import json
 import os
-import sys
 import time
 
 import torch
 
 import rewards
 from agent import ActorCriticNetwork
+from evalsuite import build_eval_sets
 from generate import generate
 from potteryshop import Action
-from rewards import reward2
-from train import UEDConfig, default_device, train_agent
-
-# shared eval harness lives in overnight_run1/
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "overnight_run1"))
-from evalsuite import build_eval_sets, evaluate_all  # noqa: E402
+from rewards import DISCOUNT_RATE, reward2
+from train import UEDConfig, compute_eval_metrics, default_device, train_agent
 
 
 def build_net(world_size: int, seed: int) -> ActorCriticNetwork:
@@ -46,25 +42,6 @@ def build_net(world_size: int, seed: int) -> ActorCriticNetwork:
         num_conv_layers=5, num_dense_layers=2, num_actions=len(Action),
         generator=torch.Generator().manual_seed(seed),
     )
-
-
-def make_eval_fn(eval_sets, horizon):
-    """Logged into training: held-out random + wall regret/break-rate."""
-    def eval_fn(net, step):
-        res = evaluate_all(net, eval_sets, horizon=horizon)
-        out = {}
-        for name, r in res.items():
-            out[f"{name}_regret"] = r.mean_regret
-            out[f"{name}_solved"] = r.frac_solved
-            out[f"{name}_break"] = r.break_rate
-        out["walls_max_regret"] = res["walls"].max_regret
-        rr = res["random"]
-        print(f"EVAL step {step:>5}  rand_regret {rr.mean_regret:.4f}  "
-              f"rand_solved {rr.frac_solved:.3f}  "
-              f"walls_regret {res['walls'].mean_regret:.3f}  "
-              f"walls_break {res['walls'].break_rate:.2f}", flush=True)
-        return out
-    return eval_fn
 
 
 def main() -> None:
@@ -116,7 +93,6 @@ def main() -> None:
     eval_sets = build_eval_sets(
         args.world_size, args.shard_mean, args.urn_mean, n_random=args.n_random
     )
-    eval_fn = make_eval_fn(eval_sets, horizon=args.num_env_steps)
 
     cfg = dict(
         name=args.name, algo="PLR-perp", steps=args.steps, world_size=args.world_size,
@@ -144,7 +120,7 @@ def main() -> None:
         entropy_coeff=args.entropy_coeff, lr=args.lr, device=device, seed=args.seed,
         replay_prob=args.replay_prob, buffer_capacity=args.buffer_capacity,
         temperature=args.beta, staleness_coeff=args.rho,
-        eval_fn=eval_fn, eval_every=args.eval_every,
+        eval_sets=eval_sets, eval_every=args.eval_every,
         checkpoint_path=ckpt_path, checkpoint_every=args.checkpoint_every,
         wandb_project=args.wandb_project if args.wandb else None,
         wandb_run_name=args.name, progress=False,
@@ -154,25 +130,28 @@ def main() -> None:
         torch.cuda.synchronize()
     wall = time.time() - t0
 
-    # larger final eval for the headline numbers
+    # larger final eval for the headline numbers (same metric code as in-loop)
     final_sets = build_eval_sets(
         args.world_size, args.shard_mean, args.urn_mean, n_random=args.n_random_final
     )
-    final = evaluate_all(net, final_sets, horizon=args.num_env_steps)
+    final = compute_eval_metrics(
+        net, final_sets, reward_fn=reward2, discount_rate=DISCOUNT_RATE,
+        horizon=args.num_env_steps, device=device,
+    )
     print(f"\n=== {args.name}  (wall {wall/60:.1f} min, {args.steps} steps) ===", flush=True)
-    for r in final.values():
-        print("  " + str(r), flush=True)
+    for name in final_sets:
+        print(f"  {name:>8} (greedy): regret {final[f'eval/{name}/greedy/regret']:+.3f} "
+              f"(max {final[f'eval/{name}/greedy/max_regret']:+.3f})  "
+              f"optimal {final[f'eval/{name}/optimal']:+.3f}  "
+              f"achieved {final[f'eval/{name}/greedy/achieved']:+.3f}  "
+              f"break-rate {final[f'eval/{name}/greedy/break']:.2f}  "
+              f"solved {final[f'eval/{name}/greedy/solved']:.2f}", flush=True)
 
     # buffer mean regret over filled slots (empty slots hold -inf in LevelSampler)
     filled_scores = sampler.scores[torch.isfinite(sampler.scores)]
     buffer_mean_regret = filled_scores.mean().item() if filled_scores.numel() else 0.0
     summary = dict(cfg=cfg, wall_min=round(wall / 60, 2),
-                   buffer_mean_regret=round(buffer_mean_regret, 4), final={
-        name: dict(mean_regret=r.mean_regret, max_regret=r.max_regret,
-                   frac_solved=r.frac_solved, break_rate=r.break_rate,
-                   mean_optimal=r.mean_optimal, mean_achieved=r.mean_achieved, n=r.n)
-        for name, r in final.items()
-    })
+                   buffer_mean_regret=round(buffer_mean_regret, 4), final=final)
     torch.save(net.state_dict(), args.save)
     with open(args.save.rsplit(".", 1)[0] + ".json", "w") as f:
         json.dump(summary, f, indent=2)

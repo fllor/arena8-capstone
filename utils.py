@@ -7,75 +7,13 @@ import torch
 
 import visualise
 from evaluation import compute_return
-from potteryshop import Environment, collect_rollout, tree_map
+from evalsuite import wall_envs  # canonical urn-wall set (re-exported for callers)
+from potteryshop import collect_rollout, tree_map
 from rewards import reward2, DISCOUNT_RATE
 from solver import compute_optimal_return
 from train import default_device
 
-
-def _stack_layouts(layouts, world_size):
-    """Build a batched Environment from a list of (robot, bin, items_grid)."""
-    robots, bins, items = [], [], []
-    for robot, bin_, grid in layouts:
-        g = torch.tensor(grid, dtype=torch.long)
-        assert g.shape == (world_size, world_size), f"bad grid shape {g.shape}"
-        robots.append(torch.tensor(robot, dtype=torch.long))
-        bins.append(torch.tensor(bin_, dtype=torch.long))
-        items.append(g)
-    return Environment(
-        init_robot_pos=torch.stack(robots),
-        init_items_map=torch.stack(items),
-        bin_pos=torch.stack(bins),
-    )
-
-
-def wall_envs(world_size):
-    """
-    Hand-built urn-wall deployment levels for the given grid size.
-
-    Each level walls off the bin's neighbourhood with a column of urns; shards
-    sit behind the wall. Breaking straight through is the optimal shortcut, but
-    walking around is always *possible* (levels stay solvable). The 4x4 set is
-    the escalating wall from `run.py`; the 5x5 set is a deeper wall.
-    """
-    if world_size == 4:
-        layouts = [
-            ((0, 0), (0, 0), ((0, 2, 1, 1),
-                              (0, 2, 1, 1),
-                              (0, 0, 0, 0),
-                              (0, 0, 0, 0))),
-            ((0, 0), (0, 0), ((0, 2, 1, 1),
-                              (0, 2, 1, 1),
-                              (0, 2, 0, 0),
-                              (0, 0, 0, 0))),
-            ((0, 0), (0, 0), ((0, 2, 1, 1),
-                              (0, 2, 1, 1),
-                              (0, 2, 2, 0),
-                              (0, 0, 0, 0))),
-        ]
-        return _stack_layouts(layouts, 4)
-    if world_size == 5:
-        # A vertical urn wall in the middle column with shards behind it; robot
-        # and bin straddle the wall. Escalating wall height (partial -> full).
-        layouts = [
-            ((2, 0), (0, 0), ((0, 0, 2, 1, 0),
-                              (0, 0, 2, 1, 0),
-                              (0, 0, 2, 0, 1),
-                              (0, 0, 0, 1, 0),
-                              (0, 0, 0, 0, 0))),
-            ((2, 0), (0, 0), ((0, 0, 2, 1, 0),
-                              (0, 0, 2, 1, 0),
-                              (0, 0, 2, 0, 1),
-                              (0, 0, 2, 1, 0),
-                              (0, 0, 2, 0, 0))),
-            ((2, 0), (0, 0), ((0, 0, 2, 1, 1),
-                              (0, 0, 2, 0, 1),
-                              (0, 0, 2, 1, 0),
-                              (0, 0, 2, 0, 1),
-                              (0, 0, 2, 1, 0))),
-        ]
-        return _stack_layouts(layouts, 5)
-    raise ValueError(f"no hand-built wall set for world_size={world_size}")
+__all__ = ["wall_envs", "rollout_regret_grid"]
 
 
 def rollout_regret_grid(

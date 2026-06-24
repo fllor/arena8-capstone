@@ -5,12 +5,12 @@ Structured as `# %%` cells (run cell-by-cell in VS Code / Jupyter, or
 top-to-bottom as a plain script). All the heavy lifting lives in the sibling
 modules; this file just wires them together and inspects the results.
 
-Pick the curriculum with `METHOD` in the config cell:
+Pick the curriculum with `METHOD` in the config cell (or as the first CLI arg):
 
-* `"dr"`   -- domain randomisation: train on every fresh batch, no buffer.
-* `"plr"`  -- PLR-bot (robust PLR): regret-keyed buffer, replay-only gradients
-              (the stop-gradient). The project's headline method.
-* `"plr_plain"` -- non-robust PLR: like `"plr"` but also trains on fresh batches.
+* `"dr"`           -- domain randomisation: train on every fresh batch, no buffer.
+* `"plr25/50/75"`  -- PLR-bot (robust PLR) at replay_prob 0.25/0.50/0.75: a
+                      regret-keyed buffer with replay-only gradients (the
+                      stop-gradient). The project's headline method.
 
 Every shared PPO hyperparameter is held identical across methods; only the
 curriculum knobs (`replay_prob`, `train_on_generate`) and the step budget differ,
@@ -23,6 +23,7 @@ steps (~`replay_prob` of them), so PLR runs `1/replay_prob`x more steps.
 
 import sys
 import functools
+import csv
 
 import matplotlib.pyplot as plt
 import torch
@@ -88,9 +89,9 @@ MODEL_PATH = f"agent_{RUN_NAME}.pt"
 LOAD_AGENT = False
 
 # Optional Weights & Biases logging. Set WANDB_PROJECT to a project name to log
-# the scored-step metrics there; leave it None to disable.
+# the per-step metrics there; leave it None to disable.
 WANDB_PROJECT = None
-# WANDB_PROJECT = "arena8-capstone"
+WANDB_PROJECT = "arena8-capstone"
 
 # the fixed-bin layout distribution, shared by training, eval, and viz
 gen = functools.partial(
@@ -159,8 +160,8 @@ else:
 # Plot training curves.
 # A row is recorded every step (tagged with its `step` index), but rows carry
 # different keys, so `series()` skips entries missing a key. DR plots
-# ppo/return + ppo/loss + ppo/entropy (every step) and regret (only on the
-# subsampled `dr_diag_every` diagnostic steps); PLR plots branch-split regret +
+# ppo/return + ppo/loss + ppo/entropy (every step) and regret/generate (only on
+# the subsampled `dr_diag_every` diagnostic steps); PLR plots branch-split regret +
 # buffer composition (the buffer's mean urn count climbing is PLR learning to
 # prefer walls).
 
@@ -184,7 +185,7 @@ if history is not None:
         panels = [
             ("ppo/return", "mean discounted return"),
             ("ppo/loss", "PPO loss"),
-            ("regret", "mean oracle regret"),
+            ("regret/generate", "mean oracle regret"),
             ("ppo/entropy", "policy entropy"),
         ]
     fig, axes = plt.subplots(len(panels), 1, figsize=(7, 9), sharex=True)
@@ -203,9 +204,8 @@ if history is not None:
 if history is not None:
     fig, ax = plt.subplots(figsize=(7, 4))
     for key, label in [
-        ("eval/random/stochasic/regret", "random regret"),
-        ("eval/walls/stochasic/regret", "urn-wall regret"),
-        ("eval/walls/stochasic/break", "urn-wall break-rate"),
+        ("eval/random/stochastic/regret", "random regret"),
+        ("eval/walls/stochastic/regret", "urn-wall regret"),
     ]:
         xs, ys = series(key)
         if xs:
@@ -242,4 +242,17 @@ regrets = rollout_regret_grid(net, watch_envs, grid_width=grid_width, device=dev
 
 walls = wall_envs(world_size)
 wall_regrets = rollout_regret_grid(net, walls, device=device)
+
+# %%
+# Dump the eval-step rows to a CSV for offline processing / plotting.
+
+if history is not None:
+    eval_rows = history[:: config.eval_every]
+    fieldnames = list(dict.fromkeys(k for row in eval_rows for k in row))
+    dump_path = f"history_eval_{RUN_NAME}.csv"
+    with open(dump_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, restval="nan")
+        writer.writeheader()
+        writer.writerows(eval_rows)
+    print(f"wrote {len(eval_rows)} eval rows x {len(fieldnames)} cols -> {dump_path}")
 # %%

@@ -76,10 +76,28 @@ def _buffer_stats(sampler: LevelSampler | None) -> dict[str, float]:
     }
 
 
-def _run_state(step: int, replay: bool, num_generate: int, num_replay: int) -> dict[str, float]:
-    """Per-step run bookkeeping (which step/branch, cumulative branch counts)."""
+def _run_state(
+    step: int,
+    replay: bool,
+    num_generate: int,
+    num_replay: int,
+    grad_rate: float,
+    rollout_rate: float,
+) -> dict[str, float]:
+    """Per-step run bookkeeping (which step/branch, cumulative branch counts).
+
+    `grad_step`/`rollout_step` are common x-axes for fair DR-vs-PLR plots: the
+    *expected* number of gradient updates / fresh-level rollouts done by `step`
+    (= step * the respective per-step rate). DR does both every step (rates 1, 1
+    -> both equal `step`); PLR-bot updates only on replay steps and generates
+    only on the rest (rates replay_prob, 1-replay_prob). Plot any metric against
+    `grad_step` to compare at equal gradient budget, `rollout_step` at equal
+    fresh-sample budget.
+    """
     return {
         "step": step,
+        "grad_step": step * grad_rate,
+        "rollout_step": step * rollout_rate,
         "branch": float(replay),
         "num_generate_steps": num_generate,
         "num_replay_updates": num_replay,
@@ -95,7 +113,7 @@ def _progress_postfix(
         postfix["cycle"] = "replay  " if replay else "generate"
         postfix["buf/urns"] = metrics.get("buffer/mean_urns", 0.0)
     else:
-        postfix["regret"] = metrics.get("regret", 0.0)
+        postfix["regret"] = metrics.get("regret/generate", 0.0)
     return postfix
 
 
@@ -179,8 +197,8 @@ def compute_eval_metrics(
 def _eval_summary_line(step: int, eval_metrics: dict[str, float], names) -> str:
     """One-line headless digest of `compute_eval_metrics` (greedy regret + break)."""
     body = " | ".join(
-        f"{name} regret {eval_metrics.get(f'eval/{name}/greedy/regret', float('nan')):+.3f} "
-        f"break {eval_metrics.get(f'eval/{name}/greedy/break', float('nan')):.2f}"
+        f"{name} regret {eval_metrics.get(f'eval/{name}/stochastic/regret', float('nan')):+.3f} "
+        f"break {eval_metrics.get(f'eval/{name}/stochastic/break', float('nan')):.2f}"
         for name in names
     )
     return f"[eval step {step}] {body}"
@@ -284,7 +302,8 @@ def train_agent(
     `regret/generate`, while replay steps log `regret/replay` from cached optima --
     both free, so logged every step. In pure DR the oracle solve is diagnostic and
     skippable, so it is subsampled to `dr_diag_frac` of the batch every
-    `dr_diag_every` steps and logged as `regret` (other rows simply omit it).
+    `dr_diag_every` steps and logged under the same `regret/generate` key (other
+    rows simply omit it), so DR and PLR generate-regret plot together.
     """
     gen = config.gen
     net = config.net
@@ -318,6 +337,13 @@ def train_agent(
         )
     # DR diagnostic-solve subsample size (unused when the buffer is active).
     dr_diag_num_envs = max(1, int(num_envs * config.dr_diag_frac))
+
+    # Per-step rates for the `grad_step`/`rollout_step` fair-comparison axes (see
+    # _run_state). A gradient update happens on every replay step and on generate
+    # steps iff `train_on_generate`; a fresh-level rollout happens on every
+    # generate step. DR (replay_prob=0, train_on_generate=True) -> both rates 1.
+    grad_rate = config.replay_prob + (1 - config.replay_prob) * float(train_on_generate)
+    rollout_rate = 1 - config.replay_prob
 
     # Held-out eval: solve each population's oracle optimum once up front (it is
     # policy-independent), then re-roll the policy against it every eval_every.
@@ -420,14 +446,19 @@ def train_agent(
                         envs[:k], discount_rate=discount_rate, horizon=num_env_steps
                     )
                     regret = optimal - returns[:k].cpu()
-                    metrics["regret"] = regret.mean().item()
+                    # same quantity as PLR's generate-branch regret (fresh-level
+                    # optimal - achieved), just subsampled -> share the key so
+                    # DR and PLR plot together.
+                    metrics["regret/generate"] = regret.mean().item()
                 num_generate += 1
 
             # Record every step (recording is cheap); the row carries whatever
             # metrics this step produced -- e.g. DR rows off `dr_diag_every` omit
-            # `regret`, PLR rows omit the branch they didn't take. The branch
+            # `regret/generate`, PLR rows omit the branch they didn't take. The branch
             # above sets the PPO + regret keys; the helpers add run/buffer/eval.
-            metrics.update(_run_state(step, replay, num_generate, num_replay))
+            metrics.update(
+                _run_state(step, replay, num_generate, num_replay, grad_rate, rollout_rate)
+            )
             metrics.update(_buffer_stats(sampler))
             if eval_enabled and step % config.eval_every == 0:
                 metrics.update(compute_eval_metrics(

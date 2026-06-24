@@ -123,7 +123,7 @@ def main() -> None:
         eval_sets=eval_sets, eval_every=args.eval_every,
         checkpoint_path=ckpt_path, checkpoint_every=args.checkpoint_every,
         wandb_project=args.wandb_project if args.wandb else None,
-        wandb_run_name=args.name, progress=False,
+        wandb_run_name=args.name
     )
     net, history, sampler = train_agent(config)
     if device.type == "cuda":

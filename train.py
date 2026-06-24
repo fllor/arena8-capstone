@@ -111,7 +111,7 @@ def _progress_postfix(
     """tqdm postfix: return + branch/buffer state (PLR) or diagnostic regret (DR)."""
     postfix: dict[str, object] = {"return": metrics.get("ppo/return", 0.0)}
     if sampler is not None:
-        postfix["cycle"] = "replay  " if replay else "generate"
+        postfix["cycle"] = "replay" if replay else "generate"
         postfix["buf/urns"] = metrics.get("buffer/mean_urns", 0.0)
     else:
         postfix["regret"] = metrics.get("regret/generate", 0.0)
@@ -414,6 +414,7 @@ def train_agent(
         )
 
     history: list[dict[str, float]] = []
+    postfix = dict()
     num_generate = 0
     num_replay = 0
     steps = tqdm(range(config.num_train_steps))
@@ -448,6 +449,8 @@ def train_agent(
                     children = edit_levels(
                         envs, num_edits=config.num_edits, generator=generator
                     )
+                    postfix["cycle"] = "edit"
+                    steps.set_postfix(postfix)
                     _, c_returns = _ppo(children, update=False)
                     c_optimal = compute_optimal_return(
                         children, discount_rate=discount_rate, horizon=num_env_steps
@@ -505,7 +508,8 @@ def train_agent(
             history.append(metrics)
             if wandb_run is not None:
                 wandb_run.log(metrics, step=step)
-            steps.set_postfix(_progress_postfix(metrics, sampler, replay))
+            postfix = _progress_postfix(metrics, sampler, replay)
+            steps.set_postfix(postfix)
             if (
                 config.checkpoint_path
                 and config.checkpoint_every

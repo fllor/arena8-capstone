@@ -4,7 +4,7 @@ Headless overnight PLR-perp training driver (fresh init).
 Mirrors overnight_run1/experiment.py (the DR driver): trains, periodically evals
 oracle regret + break-rate on a held-out random + urn-wall set, checkpoints, runs
 a larger final eval, and saves the net plus a `cfg`+`final` sidecar JSON so
-`eval_agent.py` can load it later. The trainer is `plr.train_agent_plr`.
+`eval_agent.py` can load it later. The trainer is `train.train_agent` (PLR config).
 
 Designed to run unattended in the background. Example (logs to a file, survives
 hangup):
@@ -33,8 +33,7 @@ from agent import ActorCriticNetwork
 from generate import generate
 from potteryshop import Action
 from rewards import reward2
-from plr import PLRConfig, train_agent_plr
-from train import default_device
+from train import UEDConfig, default_device, train_agent
 
 # shared eval harness lives in overnight_run1/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "overnight_run1"))
@@ -76,7 +75,7 @@ def main() -> None:
     p.add_argument("--world-size", type=int, default=4)
     p.add_argument("--shard-mean", type=float, default=None)
     p.add_argument("--urn-mean", type=float, default=None)
-    # PPO / PLR config (defaults match run_plr.py)
+    # PPO / PLR config (defaults match run.py)
     p.add_argument("--num-envs", type=int, default=2048)
     p.add_argument("--minibatch", type=int, default=16384)
     p.add_argument("--num-epochs", type=int, default=1)
@@ -134,10 +133,11 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.synchronize()
     t0 = time.time()
-    # master's PLR takes a single PLRConfig. `--beta` (rank prioritisation
+    # The unified trainer takes a single UEDConfig; PLR-perp is replay_prob>0 with
+    # train_on_generate=False (the default). `--beta` (rank prioritisation
     # temperature) maps to `temperature`; the oracle optimum is cached in the
     # LevelSampler so replay steps never re-solve (the speedup over the old loop).
-    config = PLRConfig(
+    config = UEDConfig(
         gen=gen, net=net, reward_fn=reward2, num_train_steps=args.steps,
         num_envs=args.num_envs, num_env_steps=args.num_env_steps,
         num_epochs=args.num_epochs, minibatch_size=args.minibatch,
@@ -149,7 +149,7 @@ def main() -> None:
         wandb_project=args.wandb_project if args.wandb else None,
         wandb_run_name=args.name, progress=False,
     )
-    net, history, sampler = train_agent_plr(config)
+    net, history, sampler = train_agent(config)
     if device.type == "cuda":
         torch.cuda.synchronize()
     wall = time.time() - t0

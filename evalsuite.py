@@ -5,8 +5,8 @@ mitigation: a competent-but-misgeneralising agent scores low regret on random
 layouts yet high regret on the urn-wall deployment levels.
 
 `make_eval_fn` returns an `eval_fn(net, step) -> dict` with the signature
-`train_agent_multienv` / `train_agent_plr` expect for their `eval_fn`/`eval_every`
-hook, so held-out regret is logged inline during training.
+`train_agent` expects for its `eval_fn`/`eval_every` hook, so held-out regret is
+logged inline during training.
 
 regret = optimal_return (exact oracle) - achieved_return (one stochastic rollout)
 """

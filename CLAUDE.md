@@ -88,7 +88,7 @@ flat (`from potteryshop import ...`); **run scripts from this directory**.
 | `evaluation.py` | `RewardFunction`, `compute_return`, `evaluate_behaviour`. |
 | `rewards.py` | `reward2` (intended reward) + chain, `DISCOUNT_RATE`. |
 | `generate.py` | `generate()` — FIXED-bin random layout distribution. |
-| `train.py` | `train_agent_multienv()`, `default_device()` — reusable library, no driver code. |
+| `train.py` | `UEDConfig` + `train_agent()` (unified DR/PLR/ACCEL loop), `default_device()` — reusable library, no driver code. |
 | `visualise.py` | Notebook display helpers: `display_envs`, `display_rollout(s)`, `InteractivePlayer`. Built on `Environment.render`. Needs a notebook frontend (VS Code interactive / Jupyter). |
 | `run.py` | Interactive `# %%` driver: build → show layouts → train → plot → evaluate → watch rollout. Imports from the rest. |
 | `sprites.png` | Sprite sheet used by `Environment.render`. |
@@ -96,10 +96,12 @@ flat (`from potteryshop import ...`); **run scripts from this directory**.
 Smoke-tested on CUDA: trains across 32 parallel envs, return climbs.
 
 ### The key extension seam
-`train_agent_multienv(gen, ...)` calls `gen(num_envs=, generator=)` each step to
-get a fresh batch of `Environment`s. **Swap `generate` for a buffer/curriculum/
-adversarial generator with the same signature** — that is the entire insertion
-point for PLR and ACCEL. No changes to PPO needed.
+`train_agent(config)` calls `config.gen(num_envs=, generator=)` each step to get a
+fresh batch of `Environment`s. DR/PLR/PLR⊥/ACCEL are one loop selected by config:
+`replay_prob` (0 ⇒ DR), `train_on_generate` (stop-gradient toggle), and the
+regret-keyed `LevelSampler` buffer (auto-active when `replay_prob>0`). The base
+distribution `gen` remains the swap-in point for a different layout generator. No
+changes to PPO needed.
 
 ### Notes on the extraction
 Sprite rendering (`Environment.render` + `visualise.py`) is included for
@@ -107,8 +109,9 @@ qualitative inspection — eyeballing whether the agent walks around urns or
 breaks through them, which the reward histograms can't show. It pulls in
 PIL/einops/ipywidgets and needs `sprites.png` + a notebook frontend; the
 training/eval path itself does not depend on it. Training is headless:
-`train_agent_multienv` returns `(net, history)` (list of per-step metric dicts)
-and prints progress every `log_every` steps. Device is a parameter
+`train_agent` returns `(net, history, sampler)` (history = list of per-step metric
+dicts; sampler is the level buffer or `None` in DR) and prints progress every
+`log_every` steps. Device is a parameter
 (`default_device()`: cuda→mps→cpu). The sampling `Generator` stays on CPU for
 device-independent reproducibility. Only the fixed-bin `generate` is included.
 

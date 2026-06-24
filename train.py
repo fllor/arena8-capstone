@@ -44,6 +44,7 @@ import torch
 from tqdm import tqdm
 
 from agent import ActorCriticNetwork
+from editor import edit_levels
 from evaluation import RewardFunction, compute_return
 from level_sampler import LevelSampler
 from potteryshop import Environment, Item, collect_rollout, tree_map
@@ -245,6 +246,9 @@ class UEDConfig:
     seed: int = 1                               # RNG seed
     # --- curriculum mode knobs ---
     train_on_generate: bool = False     # do gradient update on generate cycle
+    # --- ACCEL editor ---
+    edit_prob: float = 0.0              # prob. a replay step is followed by an edit (>0 => ACCEL)
+    num_edits: int = 3                  # elementary edits applied per level when editing
     # --- PLR buffer  ---
     buffer_active: bool | None = None   # use buffer (populated automatically)
     buffer_capacity: int = 4096         # maximum buffer capacity
@@ -268,11 +272,10 @@ class UEDConfig:
     wandb_run_name: str | None = None   # run name
 
     def __post_init__(self) -> None:
-        # The buffer is engaged exactly when there is something to replay. Derive
-        # it from replay_prob unless the caller has pinned it explicitly (ACCEL
-        # will also OR in edit_prob here once it lands).
+        # The buffer is engaged exactly when there is something to replay or edit.
+        # Derive it from replay_prob/edit_prob unless the caller pinned it.
         if self.buffer_active is None:
-            self.buffer_active = self.replay_prob > 0
+            self.buffer_active = self.replay_prob > 0 or self.edit_prob > 0
 
         assert (
             (self.minibatch_size == 0 and self.num_minibatches > 0) or
@@ -365,7 +368,10 @@ def train_agent(
             project=config.wandb_project,
             name=config.wandb_run_name,
             config={
-                "algo": "plr" if buffer_active else "dr",
+                "algo": (
+                    "accel" if config.edit_prob > 0
+                    else "plr" if buffer_active else "dr"
+                ),
                 "num_train_steps": config.num_train_steps,
                 "num_envs": num_envs,
                 "num_env_steps": num_env_steps,
@@ -376,6 +382,8 @@ def train_agent(
                 "lr": config.lr,
                 "seed": config.seed,
                 "train_on_generate": train_on_generate,
+                "edit_prob": config.edit_prob,
+                "num_edits": config.num_edits,
                 "buffer_active": buffer_active,
                 "replay_prob": config.replay_prob,
                 "buffer_capacity": config.buffer_capacity,
@@ -426,6 +434,31 @@ def train_agent(
                 sampler.update_batch(idx, regret)
                 metrics["regret/replay"] = regret.mean().item()
                 num_replay += 1
+
+                # --- ACCEL edit sub-step (Parker-Holder et al. 2022, Alg. 1) ---
+                # Mutate the just-replayed parents, score the children by oracle
+                # regret under the *current* policy (stop-gradient -- the student
+                # only ever trains on replay), and offer them to the buffer. The
+                # editor builds the rare urn-walls plain PLR can only wait to
+                # sample. Reuses the generate branch's admission path verbatim.
+                if config.edit_prob > 0 and (
+                    torch.rand((), generator=generator, device=generator.device)
+                    < config.edit_prob
+                ):
+                    children = edit_levels(
+                        envs, num_edits=config.num_edits, generator=generator
+                    )
+                    _, c_returns = _ppo(children, update=False)
+                    c_optimal = compute_optimal_return(
+                        children, discount_rate=discount_rate, horizon=num_env_steps
+                    )
+                    c_regret = c_optimal - c_returns.cpu()
+                    sampler.insert_batch(children, c_regret, c_optimal)
+                    metrics["regret/edit"] = c_regret.mean().item()
+                    metrics["edit/mean_urns"] = (
+                        (children.init_items_map == Item.URN)
+                        .flatten(1).sum(1).float().mean().item()
+                    )
             else:
                 # --- generate: train iff train_on_generate (DR=True, PLR-bot=False) ---
                 envs = gen(num_envs=num_envs, generator=generator).to(device)

@@ -3,3 +3,6 @@ __pycache__
 agent*.pt
 wandb
 !*/*.pt
+# persistent oracle solver cache (binary, machine-local; rebuilt on demand)
+cache_*.pt
+*/cache_*.pt

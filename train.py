@@ -50,7 +50,7 @@ from level_sampler import LevelSampler
 from potteryshop import Environment, Item, collect_rollout, tree_map
 from ppo import ppo_train_step_multienv
 from rewards import DISCOUNT_RATE, reward_break
-from solver import compute_optimal_return
+from solver import compute_optimal_return, worst_return
 
 
 def default_device() -> torch.device:
@@ -271,6 +271,8 @@ class UEDConfig:
     # --- ACCEL editor ---
     edit_prob: float = 0.0              # prob. a replay step is followed by an edit (>0 => ACCEL)
     num_edits: int = 3                  # elementary edits applied per level when editing
+    # --- buffer score ---
+    normalise_score: bool = False       # rank by regret/(optimal - worst) in [0,1] not raw regret
     # --- PLR buffer  ---
     buffer_active: bool | None = None   # use buffer (populated automatically)
     buffer_capacity: int = 4096         # maximum buffer capacity
@@ -416,6 +418,7 @@ def train_agent(
                 "train_on_generate": train_on_generate,
                 "edit_prob": config.edit_prob,
                 "num_edits": config.num_edits,
+                "normalise_score": config.normalise_score,
                 "buffer_active": buffer_active,
                 "replay_prob": config.replay_prob,
                 "buffer_capacity": config.buffer_capacity,
@@ -445,6 +448,25 @@ def train_agent(
             update=update,
         )
 
+    def _score(
+        optimal: torch.Tensor, achieved: torch.Tensor, envs: Environment
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """`(buffer_score, raw_regret)` for a batch, both CPU [B].
+
+        Raw regret = `optimal - achieved` is always returned for logging. The
+        buffer score is the same regret unless `normalise_score`, in which case it
+        is divided by the per-level achievable range `optimal - worst_return` so a
+        sparse wall and a dense fill compete on fraction-of-gap in [0,1] rather
+        than on raw break-penalty magnitude (which scales with urn count and would
+        swamp the buffer with dense levels). `optimal` is CPU; `achieved` may be
+        on device.
+        """
+        regret = optimal - achieved.cpu()
+        if not config.normalise_score:
+            return regret, regret
+        scale = optimal - worst_return(envs, horizon=num_env_steps)
+        return regret / scale, regret
+
     history: list[dict[str, float]] = []
     postfix = dict()
     num_generate = 0
@@ -463,8 +485,8 @@ def train_agent(
                 envs = envs.to(device)
                 metrics, returns = _ppo(envs, update=True)
                 optimal = sampler.get_optimal(idx)
-                regret = optimal - returns.cpu()
-                sampler.update_batch(idx, regret)
+                score, regret = _score(optimal, returns, envs)
+                sampler.update_batch(idx, score)
                 metrics["regret/replay"] = regret.mean().item()
                 num_replay += 1
 
@@ -487,8 +509,8 @@ def train_agent(
                     c_optimal = compute_optimal_return(
                         children, discount_rate=discount_rate, horizon=num_env_steps
                     )
-                    c_regret = c_optimal - c_returns.cpu()
-                    sampler.insert_batch(children, c_regret, c_optimal)
+                    c_score, c_regret = _score(c_optimal, c_returns, children)
+                    sampler.insert_batch(children, c_score, c_optimal)
                     metrics.update(_admission_stats(sampler))
                     metrics["regret/edit"] = c_regret.mean().item()
                     metrics["edit/mean_urns"] = (
@@ -505,8 +527,8 @@ def train_agent(
                     optimal = compute_optimal_return(
                         envs, discount_rate=discount_rate, horizon=num_env_steps
                     )
-                    regret = optimal - returns.cpu()
-                    sampler.insert_batch(envs, regret, optimal)
+                    score, regret = _score(optimal, returns, envs)
+                    sampler.insert_batch(envs, score, optimal)
                     metrics.update(_admission_stats(sampler))
                     metrics["regret/generate"] = regret.mean().item()
                 elif solve_diag:

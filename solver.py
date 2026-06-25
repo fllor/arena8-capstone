@@ -341,6 +341,42 @@ _STATE_BUDGET = 1_000_000
 
 
 @torch.no_grad()
+def worst_return(
+    envs: Environment,
+    *,
+    horizon: int = 64,
+    break_penalty: float | None = None,
+    per_step_cost: float | None = None,
+) -> Float[Tensor, "B"]:
+    """
+    Worst-case (minimum) achievable return per level -- in closed form, no DP.
+
+    With `reward2`'s components the minimum return is each negative term at its
+    own independent floor: smash *every* urn (each pays `-break_penalty` at most
+    once, since a smashed urn is already shards), pay the per-step living cost on
+    every step (the worst policy never finishes, so the task stays unfinished all
+    `horizon` steps), and pick up / deliver nothing (the bin reward and the
+    potential-based shaping term both floor at 0). Hence
+
+        V_worst = -(break_penalty * n_urns + per_step_cost * horizon).
+
+    This is exact when every urn is reachable within `horizon` (true on these
+    small grids) and a valid lower bound otherwise (fewer urns broken => higher
+    return). It is *undiscounted* while `compute_optimal_return` is discounted, so
+    it slightly over-estimates the achievable range -- deliberately: it makes the
+    normalised regret `(optimal - achieved) / (optimal - worst)` provably land in
+    `[0, 1]`. Assumes `rewards.WASTE_PENALTY == 0` (the current setting; a nonzero
+    waste penalty would let the worst policy also waste its non-break steps).
+
+    Like the public entry points, the reward knobs default to the live
+    `rewards.*` globals. Returns a CPU `[B]` tensor, matching the optimal solver.
+    """
+    break_penalty = rewards.BREAK_PENALTY if break_penalty is None else break_penalty
+    per_step_cost = rewards.STEP_COST if per_step_cost is None else per_step_cost
+    n_urn = (envs.init_items_map == Item.URN).flatten(1).sum(1).cpu().float()
+    return -(break_penalty * n_urn + per_step_cost * horizon)
+
+
 def compute_optimal_return(
     envs: Environment,
     *,

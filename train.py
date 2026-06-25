@@ -271,6 +271,7 @@ class UEDConfig:
     # --- ACCEL editor ---
     edit_prob: float = 0.0              # prob. a replay step is followed by an edit (>0 => ACCEL)
     num_edits: int = 3                  # elementary edits applied per level when editing
+    edit_mode: str = "toggle"           # edit distribution: "toggle" (count-changing) or "walk" (urn-walk, count-conserving)
     # --- PLR buffer  ---
     buffer_active: bool | None = None   # use buffer (populated automatically)
     buffer_capacity: int = 4096         # maximum buffer capacity
@@ -416,6 +417,7 @@ def train_agent(
                 "train_on_generate": train_on_generate,
                 "edit_prob": config.edit_prob,
                 "num_edits": config.num_edits,
+                "edit_mode": config.edit_mode,
                 "buffer_active": buffer_active,
                 "replay_prob": config.replay_prob,
                 "buffer_capacity": config.buffer_capacity,
@@ -479,7 +481,8 @@ def train_agent(
                     < config.edit_prob
                 ):
                     children = edit_levels(
-                        envs, num_edits=config.num_edits, generator=generator
+                        envs, num_edits=config.num_edits, generator=generator,
+                        edit_mode=config.edit_mode,
                     )
                     postfix["cycle"] = "edit"
                     steps.set_postfix(postfix)

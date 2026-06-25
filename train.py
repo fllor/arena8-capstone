@@ -51,6 +51,7 @@ from potteryshop import Environment, Item, collect_rollout, tree_map
 from ppo import ppo_train_step_multienv
 from rewards import DISCOUNT_RATE, reward_break
 from solver import compute_optimal_return, worst_return
+from solver_cache import SolverCache
 
 
 def default_device() -> torch.device:
@@ -284,6 +285,7 @@ class UEDConfig:
     duplicate_check: bool = True        # check for duplicates in buffer
     buffer_load_path: str | None = None # warm-start the buffer from a saved snapshot (refit to buffer_capacity)
     buffer_save_path: str | None = None # save the buffer alongside net checkpoints + at end
+    solver_cache_dir: str | None = None # persist/reuse oracle solves across runs (per reward config)
     # --- DR diagnostic oracle solve (only used when the buffer is inactive) ---
     dr_diag_every: int = 10             # how often to compute regret
     dr_diag_frac: float = 0.1           # fraction of environments to compute regret for
@@ -351,6 +353,19 @@ def train_agent(
     gen_device = device if device.type == "cuda" else torch.device("cpu")
     generator = torch.Generator(device=gen_device).manual_seed(config.seed)
     optimiser = torch.optim.Adam(net.parameters(), lr=config.lr)
+
+    # Oracle-solve memoiser: dedups duplicate layouts within a batch and caches
+    # across steps (reward/discount/horizon are fixed within a run). With
+    # `solver_cache_dir` set it also loads/persists the table across runs, keyed
+    # by reward config. Hit/miss counters are logged each step via `cache.stats()`.
+    cache = SolverCache(cache_dir=config.solver_cache_dir)
+    if config.solver_cache_dir is not None and cache.preloaded:
+        print(
+            f"loaded solver cache from {config.solver_cache_dir}: "
+            f"{cache.preloaded} solved layouts across {len(cache._buckets)} "
+            f"reward config(s)",
+            flush=True,
+        )
 
     sampler: LevelSampler | None = None
     if buffer_active:
@@ -509,7 +524,7 @@ def train_agent(
                     postfix["cycle"] = "edit"
                     steps.set_postfix(postfix)
                     _, c_returns = _ppo(children, update=False)
-                    c_optimal = compute_optimal_return(
+                    c_optimal = cache.optimal(
                         children, discount_rate=discount_rate, horizon=num_env_steps
                     )
                     c_score, c_regret = _score(c_optimal, c_returns, children)
@@ -527,7 +542,7 @@ def train_agent(
                 if buffer_active:
                     # full-batch solve: every fresh level needs a regret score to
                     # be admitted to the buffer.
-                    optimal = compute_optimal_return(
+                    optimal = cache.optimal(
                         envs, discount_rate=discount_rate, horizon=num_env_steps
                     )
                     score, regret = _score(optimal, returns, envs)
@@ -537,7 +552,7 @@ def train_agent(
                 elif solve_diag:
                     # pure DR: oracle solve is diagnostic only -> subsample it.
                     k = dr_diag_num_envs
-                    optimal = compute_optimal_return(
+                    optimal = cache.optimal(
                         envs[:k], discount_rate=discount_rate, horizon=num_env_steps
                     )
                     regret = optimal - returns[:k].cpu()
@@ -555,6 +570,7 @@ def train_agent(
                 _run_state(step, replay, num_generate, num_replay, grad_rate, rollout_rate)
             )
             metrics.update(_buffer_stats(sampler))
+            metrics.update(cache.stats())
             if eval_enabled and step % config.eval_every == 0:
                 metrics.update(compute_eval_metrics(
                     net, config.eval_sets,
@@ -578,11 +594,13 @@ def train_agent(
                 torch.save(net.state_dict(), config.checkpoint_path)
                 if config.buffer_save_path and sampler is not None:
                     sampler.save(config.buffer_save_path)
+                cache.save()
     finally:
         if wandb_run is not None:
             wandb_run.finish()
 
     if config.buffer_save_path and sampler is not None:
         sampler.save(config.buffer_save_path)
+    cache.save()
 
     return net, history, sampler

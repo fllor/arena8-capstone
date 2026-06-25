@@ -138,6 +138,7 @@ config = UEDConfig(
     num_env_steps=64,
     num_epochs=1,
     num_minibatches=32,
+    buffer_capacity=16384,
     lr=0.003,  # large batch permits greater learning rate
     device=device,
     seed=1,

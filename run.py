@@ -59,7 +59,7 @@ CURRICULA = {
     "plr50": dict(replay_prob=0.50, train_on_generate=False, wandb_run_name=f"plr_p50_{NUM_GRAD_UPDATES}"),
     "plr75": dict(replay_prob=0.75, train_on_generate=False, wandb_run_name=f"plr_p75_{NUM_GRAD_UPDATES}"),
     "plr25": dict(replay_prob=0.25, train_on_generate=False, wandb_run_name=f"plr_p25_{NUM_GRAD_UPDATES}"),
-    "accel": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=1, wandb_run_name=f"accel_{NUM_GRAD_UPDATES}"),
+    "accel": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=2, wandb_run_name=f"accel_{NUM_GRAD_UPDATES}"),
     #"plr_plain": dict(replay_prob=0.5, train_on_generate=True),
 }
 assert METHOD in CURRICULA

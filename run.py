@@ -83,11 +83,24 @@ elif world_size == 5:
     shard_mean = 2.0
     urn_mean = 1.7
 
-# Where to save/load the trained network (per-method so DR and PLR don't clobber
-# each other). Set LOAD_AGENT = True to skip training and load weights instead
-# (the architecture below must match the one the file was saved from).
+# Where to save/load the trained network + its level buffer (per-method so DR and
+# PLR don't clobber each other). After training, the agent goes to MODEL_PATH and
+# the PLR buffer to BUFFER_PATH. Set LOAD_AGENT = True to skip training and load
+# weights instead (the architecture below must match the one the file was saved
+# from).
 MODEL_PATH = f"agent_{RUN_NAME}.pt"
+BUFFER_PATH = f"buffer_{RUN_NAME}.pt"
 LOAD_AGENT = False
+
+# Warm-start: load a saved agent + buffer *before* training and continue from
+# there (test (3): branch a capacity sweep off one checkpoint instead of
+# re-running 0->plateau each time). Point WARM_START_FROM at a different run name
+# to read its checkpoint without overwriting it -- this run still saves to
+# MODEL_PATH / BUFFER_PATH above. Ignored when LOAD_AGENT is True.
+WARM_START = False
+WARM_START_FROM = RUN_NAME
+WARM_MODEL_PATH = f"agent_{WARM_START_FROM}.pt"
+WARM_BUFFER_PATH = f"buffer_{WARM_START_FROM}.pt"
 
 # Optional Weights & Biases logging. Set WANDB_PROJECT to a project name to log
 # the per-step metrics there; leave it None to disable.
@@ -143,6 +156,9 @@ config = UEDConfig(
     device=device,
     seed=1,
     eval_sets=eval_sets,
+    # Warm-start the buffer from a saved snapshot (refit to buffer_capacity above)
+    # when WARM_START is on; ignored for DR (no buffer) and when loading-only.
+    buffer_load_path=WARM_BUFFER_PATH if (WARM_START and not LOAD_AGENT) else None,
     wandb_project=WANDB_PROJECT,
     #wandb_run_name=METHOD,
     **curriculum,
@@ -154,9 +170,17 @@ if LOAD_AGENT:
     history, sampler = None, None
     print(f"loaded agent from {MODEL_PATH} (skipped training)")
 else:
+    if WARM_START:
+        # net warm-start (the buffer is loaded inside train_agent via
+        # buffer_load_path); training then continues from this checkpoint.
+        net.load_state_dict(torch.load(WARM_MODEL_PATH, map_location=device))
+        print(f"warm-starting from {WARM_MODEL_PATH} + {WARM_BUFFER_PATH}")
     net, history, sampler = train_agent(config)
     torch.save(net.state_dict(), MODEL_PATH)
     print(f"saved agent to {MODEL_PATH} ({METHOD}, {num_train_steps} steps)")
+    if sampler is not None:
+        sampler.save(BUFFER_PATH)
+        print(f"saved buffer to {BUFFER_PATH} ({sampler.size}/{sampler.capacity} levels)")
 
 # %%
 # Plot training curves.

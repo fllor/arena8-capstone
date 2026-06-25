@@ -107,6 +107,13 @@ class LevelSampler:
         self.size = 0
         self.episode_count = 0
 
+        # diagnostics from the most recent insert_batch (logged by the trainer to
+        # tell whether capacity is *binding*: if admit_rate -> 0 while min_score
+        # is near zero, the buffer is full of junk and a bigger buffer won't help).
+        self.last_offered = 0    # newcomers offered to the last insert_batch
+        self.last_admitted = 0   # of those, how many were newly admitted (top-k)
+        self.last_dup = 0        # of those, how many refreshed an existing level
+
     # -- weights -------------------------------------------------------------
 
     def _fill_mask(self) -> torch.Tensor:
@@ -223,6 +230,8 @@ class LevelSampler:
         optimal = optimal.cpu().float()
         B = envs.num_envs
         self.episode_count += B  # every offered level counts as an episode seen
+        self.last_offered = B
+        self.last_dup = 0
 
         # refresh any duplicates in place, and drop them from the insert pool
         if self.duplicate_check:
@@ -232,6 +241,7 @@ class LevelSampler:
             self.scores[d_idx] = scores[is_dup]
             self.timestamps[d_idx] = self.episode_count
             scores[is_dup] = -torch.inf  # exclude from the top-k pool below
+            self.last_dup = int(is_dup.sum())
 
         # pool incumbents + newcomers, keep the top `capacity` by score
         new_ts = torch.full((B,), self.episode_count, dtype=torch.long)
@@ -246,6 +256,9 @@ class LevelSampler:
         }
 
         keep = torch.topk(cat_scores, self.capacity).indices
+        # newcomers live in the second half of the pool (index >= capacity); the
+        # ones that survive the top-k are the freshly admitted levels.
+        self.last_admitted = int((keep >= self.capacity).sum())
         self.scores = cat_scores[keep]
         self.optimal = cat_optimal[keep]
         self.timestamps = cat_ts[keep]
@@ -267,3 +280,84 @@ class LevelSampler:
     @property
     def num_filled(self) -> int:
         return self.size
+
+    @property
+    def min_score(self) -> float:
+        """Eviction floor: the lowest regret currently held (`inf` if empty)."""
+        if self.size == 0:
+            return float("inf")
+        finite = self.scores[torch.isfinite(self.scores)]
+        return float(finite.min()) if finite.numel() else float("inf")
+
+    # -- persistence (warm-start across runs, possibly at a different capacity) --
+
+    def state_dict(self) -> dict:
+        """Picklable snapshot of the full buffer state (levels, scores, RNG)."""
+        return {
+            "levels": self.levels,
+            "scores": self.scores,
+            "timestamps": self.timestamps,
+            "optimal": self.optimal,
+            "size": self.size,
+            "episode_count": self.episode_count,
+            "generator_state": self.generator.get_state(),
+            "config": {
+                "capacity": self.capacity,
+                "replay_prob": self.replay_prob,
+                "staleness_coeff": self.staleness_coeff,
+                "temperature": self.temperature,
+                "minimum_fill_ratio": self.minimum_fill_ratio,
+                "duplicate_check": self.duplicate_check,
+            },
+        }
+
+    def load_state_dict(self, sd: dict, *, load_generator: bool = True) -> None:
+        """
+        Restore a buffer saved by `state_dict`, re-fitting it to *this* sampler's
+        capacity. If the saved buffer is larger, only the highest-regret levels
+        that fit are kept; if smaller, the saved levels go in the front slots and
+        the rest stay empty (free to fill). This is what makes a single saved
+        buffer reusable across a capacity sweep (test (3)): warm-start every
+        capacity from the same checkpoint instead of re-running 0->2k each time.
+
+        Note: shrinking discards the levels a smaller buffer would never have
+        kept, so a warm-started run measures *forward-looking* benefit, not what a
+        smaller buffer would have done from step 0.
+        """
+        cap = self.capacity
+        saved_scores = sd["scores"].float()
+        ranked = torch.where(
+            torch.isfinite(saved_scores), saved_scores, torch.full_like(saved_scores, -torch.inf)
+        )
+        # highest-regret first; finite scores sort ahead of the empty (-inf) slots
+        order = torch.argsort(ranked, descending=True)
+        k = min(cap, int(sd["size"]))
+        keep = order[:k]
+
+        saved_levels = sd["levels"]
+        self.levels = _empty_like_levels(saved_levels[0], cap)
+        for f in dataclasses.fields(saved_levels):
+            getattr(self.levels, f.name)[:k] = getattr(saved_levels, f.name)[keep]
+
+        self.scores = torch.full((cap,), -torch.inf, dtype=torch.float32)
+        self.scores[:k] = saved_scores[keep]
+        self.timestamps = torch.zeros(cap, dtype=torch.long)
+        self.timestamps[:k] = sd["timestamps"][keep]
+        self.optimal = torch.zeros(cap, dtype=torch.float32)
+        self.optimal[:k] = sd["optimal"][keep].float()
+        self.size = k
+        self.episode_count = int(sd["episode_count"])
+        self.last_offered = self.last_admitted = self.last_dup = 0
+        if load_generator and "generator_state" in sd:
+            self.generator.set_state(sd["generator_state"])
+
+    def save(self, path: str) -> None:
+        """Save the buffer to `path` (see `state_dict`)."""
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str, *, load_generator: bool = True) -> None:
+        """Load a buffer from `path` into this sampler (see `load_state_dict`)."""
+        # weights_only=False: the snapshot stores an Environment dataclass, not
+        # just tensors. The buffer file is our own checkpoint, so this is trusted.
+        sd = torch.load(path, map_location="cpu", weights_only=False)
+        self.load_state_dict(sd, load_generator=load_generator)

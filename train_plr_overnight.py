@@ -64,6 +64,14 @@ def main() -> None:
     p.add_argument("--buffer-capacity", type=int, default=4096)
     p.add_argument("--beta", type=float, default=0.3, help="rank prioritisation temperature")
     p.add_argument("--rho", type=float, default=0.1, help="staleness coefficient")
+    # warm-start (test (3)): branch a capacity sweep off one checkpoint instead of
+    # re-running 0->plateau each time. --load-net + --buffer-load resume the policy
+    # and buffer; the buffer is refit to --buffer-capacity, so each branch can use
+    # a different capacity from the same snapshot.
+    p.add_argument("--load-net", default=None, help="warm-start the policy from a saved state_dict")
+    p.add_argument("--buffer-load", default=None, help="warm-start the buffer from a saved snapshot")
+    p.add_argument("--buffer-save", default=None,
+                   help="save buffer here at every checkpoint + at end (default: <save>_buffer.pt)")
     # eval / checkpoint / logging
     p.add_argument("--eval-every", type=int, default=100)
     p.add_argument("--checkpoint-every", type=int, default=100)
@@ -78,6 +86,7 @@ def main() -> None:
         f"{args.save} already exists; pass a different --save so we don't overwrite it"
     )
     ckpt_path = args.save.rsplit(".", 1)[0] + "_ckpt.pt"
+    buffer_save_path = args.buffer_save or (args.save.rsplit(".", 1)[0] + "_buffer.pt")
 
     if args.shard_mean is None:
         args.shard_mean = 1.7 if args.world_size == 4 else 2.0
@@ -106,6 +115,9 @@ def main() -> None:
     print(f"device={device}  save->{args.save}  ckpt->{ckpt_path}", flush=True)
 
     net = build_net(args.world_size, args.seed)
+    if args.load_net is not None:
+        net.load_state_dict(torch.load(args.load_net, map_location=device))
+        print(f"warm-started net from {args.load_net}", flush=True)
     if device.type == "cuda":
         torch.cuda.synchronize()
     t0 = time.time()
@@ -122,6 +134,7 @@ def main() -> None:
         temperature=args.beta, staleness_coeff=args.rho,
         eval_sets=eval_sets, eval_every=args.eval_every,
         checkpoint_path=ckpt_path, checkpoint_every=args.checkpoint_every,
+        buffer_load_path=args.buffer_load, buffer_save_path=buffer_save_path,
         wandb_project=args.wandb_project if args.wandb else None,
         wandb_run_name=args.name
     )

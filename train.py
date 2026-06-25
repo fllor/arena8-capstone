@@ -72,8 +72,30 @@ def _buffer_stats(sampler: LevelSampler | None) -> dict[str, float]:
     return {
         "buffer/mean_score": scores.mean().item(),
         "buffer/max_score": scores.max().item(),
+        # eviction floor + fill: with the floor near 0 and the buffer full, capacity
+        # is *not* binding (it holds low-regret junk a bigger buffer would too).
+        "buffer/min_score": sampler.min_score,
+        "buffer/size": float(n),
+        "buffer/fill_ratio": n / sampler.capacity,
         "buffer/mean_urns": urns.mean().item(),
         "buffer/max_urns": urns.max().item(),
+    }
+
+
+def _admission_stats(sampler: LevelSampler) -> dict[str, float]:
+    """Admission diagnostics from the most recent insert (insert steps only).
+
+    `admit_rate` is the fraction of freshly-offered levels the buffer kept. If it
+    decays to ~0 while the buffer is full, incoming levels can no longer displace
+    incumbents -- the buffer has saturated and capacity is the binding constraint.
+    """
+    offered = sampler.last_offered
+    if offered == 0:
+        return {}
+    return {
+        "buffer/admit_count": float(sampler.last_admitted),
+        "buffer/admit_rate": sampler.last_admitted / offered,
+        "buffer/dup_rate": sampler.last_dup / offered,
     }
 
 
@@ -257,6 +279,8 @@ class UEDConfig:
     temperature: float = 0.1            # temperature for sampling levels
     minimum_fill_ratio: float = 0.5     # fill buffer before allowing replay cycles
     duplicate_check: bool = True        # check for duplicates in buffer
+    buffer_load_path: str | None = None # warm-start the buffer from a saved snapshot (refit to buffer_capacity)
+    buffer_save_path: str | None = None # save the buffer alongside net checkpoints + at end
     # --- DR diagnostic oracle solve (only used when the buffer is inactive) ---
     dr_diag_every: int = 10             # how often to compute regret
     dr_diag_frac: float = 0.1           # fraction of environments to compute regret for
@@ -338,6 +362,14 @@ def train_agent(
             duplicate_check=config.duplicate_check,
             seed=config.seed,
         )
+        if config.buffer_load_path is not None:
+            sampler.load(config.buffer_load_path)
+            print(
+                f"loaded buffer from {config.buffer_load_path}: "
+                f"{sampler.size}/{sampler.capacity} levels, "
+                f"score [{sampler.min_score:.3f}, {sampler.scores[:sampler.size].max():.3f}]",
+                flush=True,
+            )
     # DR diagnostic-solve subsample size (unused when the buffer is active).
     dr_diag_num_envs = max(1, int(num_envs * config.dr_diag_frac))
 
@@ -457,6 +489,7 @@ def train_agent(
                     )
                     c_regret = c_optimal - c_returns.cpu()
                     sampler.insert_batch(children, c_regret, c_optimal)
+                    metrics.update(_admission_stats(sampler))
                     metrics["regret/edit"] = c_regret.mean().item()
                     metrics["edit/mean_urns"] = (
                         (children.init_items_map == Item.URN)
@@ -474,6 +507,7 @@ def train_agent(
                     )
                     regret = optimal - returns.cpu()
                     sampler.insert_batch(envs, regret, optimal)
+                    metrics.update(_admission_stats(sampler))
                     metrics["regret/generate"] = regret.mean().item()
                 elif solve_diag:
                     # pure DR: oracle solve is diagnostic only -> subsample it.
@@ -517,8 +551,13 @@ def train_agent(
                 and step % config.checkpoint_every == 0
             ):
                 torch.save(net.state_dict(), config.checkpoint_path)
+                if config.buffer_save_path and sampler is not None:
+                    sampler.save(config.buffer_save_path)
     finally:
         if wandb_run is not None:
             wandb_run.finish()
+
+    if config.buffer_save_path and sampler is not None:
+        sampler.save(config.buffer_save_path)
 
     return net, history, sampler

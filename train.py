@@ -272,6 +272,7 @@ class UEDConfig:
     # --- ACCEL editor ---
     edit_prob: float = 0.0              # prob. a replay step is followed by an edit (>0 => ACCEL)
     num_edits: int = 3                  # elementary edits applied per level when editing
+    edit_mode: str = "toggle"           # edit distribution: "toggle" (count-changing) or "walk" (urn-walk, count-conserving)
     # --- buffer score ---
     normalise_score: bool = False       # rank by regret/(optimal - worst) in [0,1] not raw regret
     # --- PLR buffer  ---
@@ -433,6 +434,7 @@ def train_agent(
                 "train_on_generate": train_on_generate,
                 "edit_prob": config.edit_prob,
                 "num_edits": config.num_edits,
+                "edit_mode": config.edit_mode,
                 "normalise_score": config.normalise_score,
                 "buffer_active": buffer_active,
                 "replay_prob": config.replay_prob,
@@ -516,7 +518,8 @@ def train_agent(
                     < config.edit_prob
                 ):
                     children = edit_levels(
-                        envs, num_edits=config.num_edits, generator=generator
+                        envs, num_edits=config.num_edits, generator=generator,
+                        edit_mode=config.edit_mode,
                     )
                     postfix["cycle"] = "edit"
                     steps.set_postfix(postfix)

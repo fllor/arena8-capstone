@@ -59,7 +59,15 @@ CURRICULA = {
     "plr50": dict(replay_prob=0.50, train_on_generate=False, wandb_run_name=f"plr_p50_{NUM_GRAD_UPDATES}"),
     "plr75": dict(replay_prob=0.75, train_on_generate=False, wandb_run_name=f"plr_p75_{NUM_GRAD_UPDATES}"),
     "plr25": dict(replay_prob=0.25, train_on_generate=False, wandb_run_name=f"plr_p25_{NUM_GRAD_UPDATES}"),
-    "accel": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=2, wandb_run_name=f"accel_{NUM_GRAD_UPDATES}"),
+    "accel": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=1, wandb_run_name=f"accel_{NUM_GRAD_UPDATES}"),
+    "accel_walk": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=1, edit_mode="walk", normalise_score=True, wandb_run_name=f"accel_walk_{NUM_GRAD_UPDATES}"),
+    # "fast": aggressive wall-building (more/larger edits) -- the original suggestion.
+    "accel_walk_fast":   dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.8, num_edits=2, edit_mode="walk", normalise_score=True, wandb_run_name=f"accel_walk_fast_{NUM_GRAD_UPDATES}"),
+    # "smooth": anti-spike -- gradual building (edit_prob/num_edits unchanged) but
+    # flatter replay (temperature) + more revisiting (staleness) so mastered walls
+    # aren't evicted/forgotten. Buffer_capacity (32768, in the UEDConfig call below)
+    # is shared by both and gives the retention reservoir.
+    "accel_walk_smooth": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=1, edit_mode="walk", normalise_score=True, temperature=0.3, staleness_coeff=0.2, wandb_run_name=f"accel_walk_smooth_{NUM_GRAD_UPDATES}"),
     #"plr_plain": dict(replay_prob=0.5, train_on_generate=True),
 }
 assert METHOD in CURRICULA
@@ -151,9 +159,7 @@ config = UEDConfig(
     num_env_steps=64,
     num_epochs=1,
     num_minibatches=32,
-    buffer_capacity=16384,
-    # buffer_capacity=65536,  # 8:1 vs num_envs so edit cycles can't churn the archive
-    normalise_score=True,
+    buffer_capacity=32768,
     lr=0.003,  # large batch permits greater learning rate
     device=device,
     seed=1,

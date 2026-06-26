@@ -182,6 +182,11 @@ class LevelSampler:
             return int(eq.to(torch.int8).argmax())
         return -1
 
+    # peak elements allowed in the transient `[chunk, capacity, d]` equality
+    # tensor; bounds the dup-check's CPU memory so capacity can grow well past
+    # num_envs without a multi-GB spike (see _duplicate_indices).
+    _DUP_CHECK_BUDGET = 128_000_000
+
     def _duplicate_indices(self, envs: Environment) -> torch.Tensor:
         """
         For each level in `envs`, the buffer index it duplicates, or -1.
@@ -191,16 +196,33 @@ class LevelSampler:
         duplicates one at a time, but a single batched comparison is far cheaper
         and only differs on the rare within-batch duplicate (two identical fresh
         levels), which is immaterial here.
+
+        `B` is processed in chunks so the transient `[chunk, capacity, d]`
+        equality tensor stays within `_DUP_CHECK_BUDGET`. At large
+        `num_envs`/`capacity` (e.g. 8192/65536) a single `[B, capacity, d]`
+        comparison would allocate several GB on CPU; chunking caps the peak while
+        leaving the result identical to the unchunked form.
         """
         B = envs.num_envs
+        fields = list(dataclasses.fields(envs))
+        max_field_width = max(
+            getattr(envs, f.name).reshape(B, -1).shape[1] for f in fields
+        )
+        chunk = max(1, self._DUP_CHECK_BUDGET // (self.capacity * max_field_width))
         mask = self._fill_mask()  # [capacity]
-        eq = mask[None, :].expand(B, self.capacity).clone()
-        for f in dataclasses.fields(envs):
-            buf = getattr(self.levels, f.name).reshape(self.capacity, -1)  # [K, d]
-            qry = getattr(envs, f.name).reshape(B, -1)  # [B, d]
-            eq &= (buf[None] == qry[:, None]).all(dim=2)  # [B, K]
-        has = eq.any(dim=1)
-        return torch.where(has, eq.to(torch.int8).argmax(dim=1), torch.full((B,), -1))
+        out = torch.full((B,), -1)
+        for lo in range(0, B, chunk):
+            hi = min(lo + chunk, B)
+            eq = mask[None, :].expand(hi - lo, self.capacity).clone()  # [b, K]
+            for f in fields:
+                buf = getattr(self.levels, f.name).reshape(self.capacity, -1)  # [K, d]
+                qry = getattr(envs, f.name).reshape(B, -1)[lo:hi]  # [b, d]
+                eq &= (buf[None] == qry[:, None]).all(dim=2)  # [b, K]
+            has = eq.any(dim=1)
+            out[lo:hi] = torch.where(
+                has, eq.to(torch.int8).argmax(dim=1), torch.full((hi - lo,), -1)
+            )
+        return out
 
     def insert_batch(
         self,

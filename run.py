@@ -152,6 +152,7 @@ config = UEDConfig(
     num_epochs=1,
     num_minibatches=32,
     buffer_capacity=16384,
+    # buffer_capacity=65536,  # 8:1 vs num_envs so edit cycles can't churn the archive
     normalise_score=True,
     lr=0.003,  # large batch permits greater learning rate
     device=device,

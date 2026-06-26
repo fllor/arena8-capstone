@@ -1,0 +1,255 @@
+using device: cuda
+Run: plr_p50_1000
+[eval step 0] random regret +12.390 break 0.79 | walls regret +13.087 break 1.00
+[eval step 10] random regret +11.964 break 0.70 | walls regret +14.010 break 1.00
+[eval step 20] random regret +11.210 break 0.54 | walls regret +10.724 break 1.00
+[eval step 30] random regret +10.503 break 0.36 | walls regret +9.345 break 1.00
+[eval step 40] random regret +10.218 break 0.29 | walls regret +8.990 break 1.00
+[eval step 50] random regret +9.846 break 0.24 | walls regret +8.835 break 1.00
+[eval step 60] random regret +9.457 break 0.20 | walls regret +7.927 break 1.00
+[eval step 70] random regret +9.109 break 0.16 | walls regret +8.000 break 1.00
+[eval step 80] random regret +8.794 break 0.16 | walls regret +7.925 break 1.00
+[eval step 90] random regret +8.472 break 0.14 | walls regret +7.836 break 1.00
+[eval step 100] random regret +8.244 break 0.15 | walls regret +7.853 break 1.00
+[eval step 110] random regret +8.131 break 0.15 | walls regret +7.638 break 1.00
+[eval step 120] random regret +7.787 break 0.15 | walls regret +7.658 break 1.00
+[eval step 130] random regret +7.565 break 0.16 | walls regret +7.682 break 1.00
+[eval step 140] random regret +7.359 break 0.16 | walls regret +7.062 break 1.00
+[eval step 150] random regret +7.337 break 0.16 | walls regret +7.601 break 1.00
+[eval step 160] random regret +6.875 break 0.16 | walls regret +8.405 break 1.00
+[eval step 170] random regret +6.890 break 0.14 | walls regret +7.430 break 1.00
+[eval step 180] random regret +6.806 break 0.14 | walls regret +8.263 break 1.00
+[eval step 190] random regret +6.611 break 0.16 | walls regret +8.643 break 1.00
+[eval step 200] random regret +6.421 break 0.18 | walls regret +8.531 break 1.00
+[eval step 210] random regret +7.012 break 0.16 | walls regret +5.954 break 0.00
+[eval step 220] random regret +6.929 break 0.14 | walls regret +6.705 break 0.33
+[eval step 230] random regret +6.671 break 0.13 | walls regret +6.605 break 0.33
+[eval step 240] random regret +6.606 break 0.15 | walls regret +7.877 break 1.00
+[eval step 250] random regret +6.229 break 0.20 | walls regret +8.522 break 1.00
+[eval step 260] random regret +6.084 break 0.21 | walls regret +8.648 break 1.00
+[eval step 270] random regret +6.172 break 0.21 | walls regret +8.522 break 1.00
+[eval step 280] random regret +6.429 break 0.20 | walls regret +8.643 break 1.00
+[eval step 290] random regret +6.370 break 0.19 | walls regret +8.527 break 1.00
+[eval step 300] random regret +6.044 break 0.21 | walls regret +8.263 break 1.00
+[eval step 310] random regret +6.485 break 0.16 | walls regret +7.479 break 0.67
+[eval step 320] random regret +5.923 break 0.19 | walls regret +8.160 break 1.00
+[eval step 330] random regret +5.598 break 0.22 | walls regret +8.236 break 1.00
+[eval step 340] random regret +5.314 break 0.25 | walls regret +9.404 break 1.00
+[eval step 350] random regret +5.486 break 0.30 | walls regret +10.808 break 1.00
+[eval step 360] random regret +4.703 break 0.32 | walls regret +9.772 break 1.00
+[eval step 370] random regret +5.293 break 0.30 | walls regret +7.302 break 0.33
+[eval step 380] random regret +4.794 break 0.33 | walls regret +12.337 break 1.00
+[eval step 390] random regret +4.300 break 0.40 | walls regret +10.799 break 1.00
+[eval step 400] random regret +4.212 break 0.41 | walls regret +10.365 break 1.00
+[eval step 410] random regret +4.587 break 0.39 | walls regret +7.291 break 1.00
+[eval step 420] random regret +3.669 break 0.31 | walls regret +8.144 break 1.00
+[eval step 430] random regret +2.871 break 0.28 | walls regret +7.286 break 1.00
+[eval step 440] random regret +2.414 break 0.26 | walls regret +6.207 break 1.00
+[eval step 450] random regret +1.835 break 0.23 | walls regret +5.347 break 1.00
+[eval step 460] random regret +1.517 break 0.21 | walls regret +4.291 break 1.00
+[eval step 470] random regret +1.526 break 0.23 | walls regret +5.009 break 1.00
+[eval step 480] random regret +1.389 break 0.22 | walls regret +3.854 break 1.00
+[eval step 490] random regret +1.160 break 0.18 | walls regret +2.109 break 1.00
+[eval step 500] random regret +1.117 break 0.17 | walls regret +3.229 break 1.00
+[eval step 510] random regret +1.009 break 0.16 | walls regret +3.810 break 1.00
+[eval step 520] random regret +0.796 break 0.13 | walls regret +1.816 break 1.00
+[eval step 530] random regret +0.648 break 0.12 | walls regret +1.877 break 1.00
+[eval step 540] random regret +0.595 break 0.12 | walls regret +1.869 break 1.00
+[eval step 550] random regret +0.599 break 0.12 | walls regret +1.186 break 1.00
+[eval step 560] random regret +0.557 break 0.10 | walls regret +0.627 break 1.00
+[eval step 570] random regret +0.581 break 0.10 | walls regret +0.484 break 1.00
+[eval step 580] random regret +0.521 break 0.10 | walls regret +1.245 break 1.00
+[eval step 590] random regret +0.533 break 0.09 | walls regret +1.019 break 1.00
+[eval step 600] random regret +0.477 break 0.10 | walls regret +0.475 break 1.00
+[eval step 610] random regret +0.462 break 0.10 | walls regret +0.415 break 1.00
+[eval step 620] random regret +0.486 break 0.11 | walls regret +0.525 break 1.00
+[eval step 630] random regret +0.548 break 0.10 | walls regret +0.493 break 1.00
+[eval step 640] random regret +0.478 break 0.10 | walls regret +0.437 break 1.00
+[eval step 650] random regret +0.470 break 0.09 | walls regret +0.433 break 1.00
+[eval step 660] random regret +0.470 break 0.11 | walls regret +1.672 break 1.00
+[eval step 670] random regret +0.404 break 0.10 | walls regret +0.794 break 1.00
+[eval step 680] random regret +0.412 break 0.10 | walls regret +0.375 break 1.00
+[eval step 690] random regret +0.440 break 0.09 | walls regret +0.144 break 1.00
+[eval step 700] random regret +0.384 break 0.09 | walls regret +0.138 break 1.00
+[eval step 710] random regret +0.393 break 0.09 | walls regret +0.144 break 1.00
+[eval step 720] random regret +0.414 break 0.10 | walls regret +0.471 break 1.00
+[eval step 730] random regret +0.350 break 0.09 | walls regret +0.331 break 1.00
+[eval step 740] random regret +0.370 break 0.09 | walls regret +0.363 break 1.00
+[eval step 750] random regret +0.359 break 0.09 | walls regret +0.304 break 1.00
+[eval step 760] random regret +0.355 break 0.09 | walls regret +0.304 break 1.00
+[eval step 770] random regret +0.322 break 0.09 | walls regret +0.062 break 1.00
+[eval step 780] random regret +0.337 break 0.09 | walls regret +0.059 break 1.00
+[eval step 790] random regret +0.325 break 0.09 | walls regret +0.062 break 1.00
+[eval step 800] random regret +0.344 break 0.09 | walls regret +0.293 break 1.00
+[eval step 810] random regret +0.330 break 0.09 | walls regret +0.301 break 1.00
+[eval step 820] random regret +0.345 break 0.09 | walls regret +0.119 break 1.00
+[eval step 830] random regret +0.331 break 0.08 | walls regret +0.075 break 1.00
+[eval step 840] random regret +0.334 break 0.08 | walls regret +0.132 break 1.00
+[eval step 850] random regret +0.329 break 0.08 | walls regret +0.189 break 1.00
+[eval step 860] random regret +0.296 break 0.08 | walls regret +0.132 break 1.00
+[eval step 870] random regret +0.317 break 0.09 | walls regret +0.132 break 1.00
+[eval step 880] random regret +0.300 break 0.08 | walls regret +0.138 break 1.00
+[eval step 890] random regret +0.324 break 0.09 | walls regret +0.081 break 1.00
+[eval step 900] random regret +0.302 break 0.09 | walls regret +0.204 break 1.00
+[eval step 910] random regret +0.299 break 0.08 | walls regret +0.144 break 1.00
+[eval step 920] random regret +0.311 break 0.08 | walls regret +0.138 break 1.00
+[eval step 930] random regret +0.273 break 0.08 | walls regret +0.087 break 1.00
+[eval step 940] random regret +0.267 break 0.08 | walls regret +0.214 break 1.00
+[eval step 950] random regret +0.274 break 0.08 | walls regret +1.067 break 1.00
+[eval step 960] random regret +0.278 break 0.08 | walls regret +1.067 break 1.00
+[eval step 970] random regret +0.288 break 0.08 | walls regret +0.699 break 1.00
+[eval step 980] random regret +0.303 break 0.08 | walls regret +0.382 break 1.00
+[eval step 990] random regret +0.321 break 0.08 | walls regret +0.382 break 1.00
+[eval step 1000] random regret +0.312 break 0.08 | walls regret +0.385 break 1.00
+[eval step 1010] random regret +0.291 break 0.08 | walls regret +0.373 break 1.00
+[eval step 1020] random regret +0.306 break 0.08 | walls regret +0.128 break 1.00
+[eval step 1030] random regret +0.310 break 0.08 | walls regret +0.206 break 1.00
+[eval step 1040] random regret +0.282 break 0.08 | walls regret +0.144 break 1.00
+[eval step 1050] random regret +0.295 break 0.08 | walls regret +0.091 break 1.00
+[eval step 1060] random regret +0.308 break 0.09 | walls regret +0.087 break 1.00
+[eval step 1070] random regret +0.273 break 0.08 | walls regret +0.093 break 1.00
+[eval step 1080] random regret +0.252 break 0.08 | walls regret +0.093 break 1.00
+[eval step 1090] random regret +0.277 break 0.08 | walls regret +0.087 break 1.00
+[eval step 1100] random regret +0.253 break 0.08 | walls regret +0.087 break 1.00
+[eval step 1110] random regret +0.238 break 0.07 | walls regret +0.087 break 1.00
+[eval step 1120] random regret +0.241 break 0.08 | walls regret +0.087 break 1.00
+[eval step 1130] random regret +0.241 break 0.07 | walls regret +0.093 break 1.00
+[eval step 1140] random regret +0.250 break 0.08 | walls regret +0.214 break 1.00
+[eval step 1150] random regret +0.261 break 0.08 | walls regret +0.471 break 1.00
+[eval step 1160] random regret +0.266 break 0.08 | walls regret +0.214 break 1.00
+[eval step 1170] random regret +0.261 break 0.08 | walls regret +0.214 break 1.00
+[eval step 1180] random regret +0.278 break 0.08 | walls regret +0.081 break 1.00
+[eval step 1190] random regret +0.256 break 0.08 | walls regret +0.029 break 1.00
+[eval step 1200] random regret +0.252 break 0.07 | walls regret +0.530 break 1.00
+[eval step 1210] random regret +0.279 break 0.07 | walls regret +0.530 break 1.00
+[eval step 1220] random regret +0.258 break 0.08 | walls regret +0.202 break 1.00
+[eval step 1230] random regret +0.252 break 0.08 | walls regret +0.204 break 1.00
+[eval step 1240] random regret +0.254 break 0.08 | walls regret +0.215 break 1.00
+[eval step 1250] random regret +0.279 break 0.08 | walls regret +0.094 break 1.00
+[eval step 1260] random regret +0.253 break 0.08 | walls regret +0.094 break 1.00
+[eval step 1270] random regret +0.238 break 0.08 | walls regret +0.220 break 1.00
+[eval step 1280] random regret +0.235 break 0.07 | walls regret +0.220 break 1.00
+[eval step 1290] random regret +0.232 break 0.08 | walls regret +0.097 break 1.00
+[eval step 1300] random regret +0.248 break 0.07 | walls regret +0.097 break 1.00
+[eval step 1310] random regret +0.262 break 0.08 | walls regret +0.220 break 1.00
+[eval step 1320] random regret +0.278 break 0.08 | walls regret +0.217 break 1.00
+[eval step 1330] random regret +0.274 break 0.08 | walls regret +0.220 break 1.00
+[eval step 1340] random regret +0.293 break 0.08 | walls regret +0.204 break 1.00
+[eval step 1350] random regret +0.266 break 0.08 | walls regret +0.094 break 1.00
+[eval step 1360] random regret +0.223 break 0.07 | walls regret +0.165 break 1.00
+[eval step 1370] random regret +0.230 break 0.08 | walls regret +0.039 break 1.00
+[eval step 1380] random regret +0.219 break 0.07 | walls regret +0.029 break 1.00
+[eval step 1390] random regret +0.232 break 0.07 | walls regret +0.155 break 1.00
+[eval step 1400] random regret +0.233 break 0.08 | walls regret +0.155 break 1.00
+[eval step 1410] random regret +0.261 break 0.08 | walls regret +0.029 break 1.00
+[eval step 1420] random regret +0.257 break 0.08 | walls regret +0.087 break 1.00
+[eval step 1430] random regret +0.252 break 0.08 | walls regret +0.087 break 1.00
+[eval step 1440] random regret +0.241 break 0.07 | walls regret +0.087 break 1.00
+[eval step 1450] random regret +0.254 break 0.08 | walls regret +0.145 break 1.00
+[eval step 1460] random regret +0.251 break 0.08 | walls regret +0.214 break 1.00
+[eval step 1470] random regret +0.261 break 0.07 | walls regret +0.154 break 1.00
+[eval step 1480] random regret +0.275 break 0.07 | walls regret +0.234 break 1.00
+[eval step 1490] random regret +0.270 break 0.07 | walls regret +0.145 break 1.00
+[eval step 1500] random regret +0.235 break 0.07 | walls regret +0.145 break 1.00
+[eval step 1510] random regret +0.276 break 0.08 | walls regret +0.087 break 1.00
+[eval step 1520] random regret +0.248 break 0.08 | walls regret +0.084 break 1.00
+[eval step 1530] random regret +0.239 break 0.08 | walls regret +0.084 break 1.00
+[eval step 1540] random regret +0.221 break 0.07 | walls regret +0.097 break 1.00
+[eval step 1550] random regret +0.222 break 0.07 | walls regret +0.094 break 1.00
+[eval step 1560] random regret +0.236 break 0.07 | walls regret +0.087 break 1.00
+[eval step 1570] random regret +0.230 break 0.07 | walls regret +0.223 break 1.00
+[eval step 1580] random regret +0.223 break 0.07 | walls regret +0.057 break 1.00
+[eval step 1590] random regret +0.230 break 0.07 | walls regret +0.115 break 1.00
+[eval step 1600] random regret +0.215 break 0.07 | walls regret +0.195 break 1.00
+[eval step 1610] random regret +0.221 break 0.07 | walls regret +0.087 break 1.00
+[eval step 1620] random regret +0.231 break 0.07 | walls regret +0.063 break 1.00
+[eval step 1630] random regret +0.219 break 0.06 | walls regret +0.158 break 1.00
+[eval step 1640] random regret +0.235 break 0.06 | walls regret +0.231 break 1.00
+[eval step 1650] random regret +0.218 break 0.06 | walls regret +0.467 break 1.00
+[eval step 1660] random regret +0.234 break 0.05 | walls regret +0.366 break 1.00
+[eval step 1670] random regret +0.236 break 0.06 | walls regret +0.379 break 1.00
+[eval step 1680] random regret +0.232 break 0.05 | walls regret +0.118 break 1.00
+[eval step 1690] random regret +0.221 break 0.05 | walls regret +0.118 break 1.00
+[eval step 1700] random regret +0.242 break 0.05 | walls regret +0.161 break 1.00
+[eval step 1710] random regret +0.243 break 0.06 | walls regret +0.561 break 1.00
+[eval step 1720] random regret +0.231 break 0.05 | walls regret +0.755 break 1.00
+[eval step 1730] random regret +0.226 break 0.05 | walls regret +0.633 break 1.00
+[eval step 1740] random regret +0.203 break 0.05 | walls regret +0.636 break 1.00
+[eval step 1750] random regret +0.247 break 0.05 | walls regret +0.103 break 1.00
+[eval step 1760] random regret +0.266 break 0.06 | walls regret +0.163 break 1.00
+[eval step 1770] random regret +0.238 break 0.05 | walls regret +0.164 break 1.00
+[eval step 1780] random regret +0.208 break 0.05 | walls regret +0.593 break 1.00
+[eval step 1790] random regret +0.212 break 0.05 | walls regret +0.467 break 1.00
+[eval step 1800] random regret +0.224 break 0.06 | walls regret +0.408 break 1.00
+[eval step 1810] random regret +0.184 break 0.05 | walls regret +0.044 break 1.00
+[eval step 1820] random regret +0.197 break 0.05 | walls regret +0.158 break 1.00
+[eval step 1830] random regret +0.211 break 0.06 | walls regret +0.038 break 1.00
+[eval step 1840] random regret +0.196 break 0.05 | walls regret +0.087 break 1.00
+[eval step 1850] random regret +0.192 break 0.05 | walls regret +0.087 break 1.00
+[eval step 1860] random regret +0.196 break 0.05 | walls regret +0.144 break 1.00
+[eval step 1870] random regret +0.212 break 0.05 | walls regret +0.035 break 1.00
+[eval step 1880] random regret +0.216 break 0.05 | walls regret +0.035 break 1.00
+[eval step 1890] random regret +0.240 break 0.06 | walls regret +0.035 break 1.00
+[eval step 1900] random regret +0.219 break 0.05 | walls regret +0.035 break 1.00
+[eval step 1910] random regret +0.194 break 0.05 | walls regret +0.161 break 1.00
+[eval step 1920] random regret +0.195 break 0.05 | walls regret +0.161 break 1.00
+[eval step 1930] random regret +0.204 break 0.05 | walls regret +0.199 break 1.00
+[eval step 1940] random regret +0.190 break 0.05 | walls regret +0.199 break 1.00
+[eval step 1950] random regret +0.194 break 0.05 | walls regret +0.227 break 1.00
+[eval step 1960] random regret +0.191 break 0.05 | walls regret +0.217 break 1.00
+[eval step 1970] random regret +0.191 break 0.05 | walls regret +0.106 break 1.00
+[eval step 1980] random regret +0.193 break 0.05 | walls regret +0.043 break 1.00
+[eval step 1990] random regret +0.188 break 0.05 | walls regret +0.459 break 1.00
+[eval step 2000] random regret +0.180 break 0.05 | walls regret +0.518 break 1.00
+saved agent to agent_plr_p50_1000.pt (plr50, 2000 steps)
+saved buffer to buffer_plr_p50_1000.pt (16384/16384 levels)
+top buffer regret scores: [7.723801612854004, 7.706617832183838, 7.629951000213623, 7.603992462158203, 7.571305274963379, 7.5631585121154785, 7.546210289001465, 7.498054027557373, 7.463669776916504, 7.455986022949219, 7.4500508308410645, 7.40104341506958, 7.40104341506958, 7.40104341506958, 7.393566608428955, 7.360489368438721]
+their urn counts: [4, 4, 6, 5, 3, 5, 6, 4, 4, 3, 3, 6, 4, 4, 5, 4]
+HTML(value='<b>highest-regret buffer levels</b>')
+Image(value=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x8f\x00\x00\x01\xef\x08\x02\x00\x00\x00#\x0c\xc4\xea...')
+ env (row,col)   optimal  achieved    regret
+       0 (0,0)    -2.818    -2.827    +0.009
+       1 (0,1)    -1.538    -1.538    -0.000
+       2 (0,2)    -0.995    -0.995    -0.000
+       3 (0,3)    -2.402    -2.421    +0.019
+       4 (0,4)    -0.804    -0.804    -0.000
+       5 (0,5)    -2.420    -2.429    +0.009
+       6 (1,0)    -1.195    -1.195    +0.000
+       7 (1,1)    -1.582    -1.582    +0.000
+       8 (1,2)    -0.010    -0.409    +0.399
+       9 (1,3)    -0.607    -0.804    +0.197
+      10 (1,4)    -0.607    -1.000    +0.393
+      11 (1,5)    -0.804    -1.195    +0.391
+      12 (2,0)    -0.423    -0.423    -0.000
+      13 (2,1)    -0.995    -0.995    -0.000
+      14 (2,2)    -4.202    -4.211    +0.009
+      15 (2,3)    -0.804    -0.804    -0.000
+      16 (2,4)    -0.995    -0.995    -0.000
+      17 (2,5)    -1.195    -1.195    +0.000
+      18 (3,0)    -1.000    -1.000    -0.000
+      19 (3,1)    -0.010    -0.010    -0.000
+      20 (3,2)    -0.409    -0.409    -0.000
+      21 (3,3)    -1.384    -1.769    +0.385
+      22 (3,4)    -0.607    -0.607    -0.000
+      23 (3,5)    -2.937    -5.082    +2.145
+      24 (4,0)    -0.413    -0.413    -0.000
+      25 (4,1)    -0.799    -0.799    -0.000
+      26 (4,2)    -1.004    -1.004    -0.000
+      27 (4,3)    -0.804    -0.804    +0.000
+      28 (4,4)    -2.292    -2.311    +0.019
+      29 (4,5)    -2.283    -2.283    +0.000
+      30 (5,0)    -1.750    -1.750    -0.000
+      31 (5,1)    -0.804    -0.804    +0.000
+      32 (5,2)    -2.103    -2.103    -0.000
+      33 (5,3)    -2.776    -2.776    -0.000
+      34 (5,4)    -1.899    -2.251    +0.352
+      35 (5,5)    -2.131    -2.131    -0.000
+          mean    -1.383    -1.503    +0.120
+Image(value=b'GIF89aU\x02\xe5\x02\x83\x00\x00\xd5\xed\xed\xff\xaa^|\xa2\xc2\x95\xa0h\xd0\x81Y\x8diz\x9bNNBk\xa1Tpd...', format='gif')
+ env (row,col)   optimal  achieved    regret
+       0 (0,0)    -5.024    -5.240    +0.217
+       1 (0,1)    -5.024    -5.441    +0.417
+       2 (0,2)    -5.024    -5.439    +0.415
+          mean    -5.024    -5.373    +0.350
+Image(value=b'GIF89a,\x01~\x00\x83\x00\x00\xd5\xed\xed\xff\xaa^|\xa2\xc2\x95\xa0h\xd0\x81Y\x8diz\x9bNNTpdTNhBk\xa1...', format='gif')
+wrote 201 eval rows x 56 cols -> history_eval_plr_p50_1000.csv

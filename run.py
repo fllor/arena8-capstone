@@ -47,7 +47,7 @@ print(f"using device: {device}")
 METHOD = "dr"  # "dr" | "plr50"
 # Number of gradient updates (DR equivalent)
 # ~1 min / 100 steps for DR
-NUM_GRAD_UPDATES = 500
+NUM_GRAD_UPDATES = 1000
 
 if len(sys.argv) > 1:
     METHOD = sys.argv[1]

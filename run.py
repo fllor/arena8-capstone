@@ -160,7 +160,7 @@ config = UEDConfig(
     net=net,
     reward_fn=reward2,
     num_train_steps=num_train_steps+1,  # +1 to compute final metrics
-    num_envs=8192,
+    num_envs=4096,  # halved (teammate's 5x5 setting) for ~2x throughput so 5k fits before the GPU cutoff
     num_env_steps=64,
     num_epochs=1,
     num_minibatches=32,
@@ -169,6 +169,11 @@ config = UEDConfig(
     device=device,
     seed=1,
     eval_sets=eval_sets,
+    # Mid-run checkpointing so a GPU-deadline kill keeps progress (net + buffer
+    # written every checkpoint_every steps), not just the final save.
+    checkpoint_path=f"agent_{RUN_NAME}_ckpt.pt",
+    checkpoint_every=100,
+    buffer_save_path=BUFFER_PATH,
     # Warm-start the buffer from a saved snapshot (refit to buffer_capacity above)
     # when WARM_START is on; ignored for DR (no buffer) and when loading-only.
     buffer_load_path=WARM_BUFFER_PATH if (WARM_START and not LOAD_AGENT) else None,

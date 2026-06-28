@@ -57,6 +57,7 @@ if len(sys.argv) > 2:
 CURRICULA = {
     "dr":    dict(replay_prob=0.00, train_on_generate=True,  wandb_run_name=f"dr_{NUM_GRAD_UPDATES}"),
     "plr50": dict(replay_prob=0.50, train_on_generate=False, wandb_run_name=f"plr_p50_{NUM_GRAD_UPDATES}"),
+    "plr50_norm": dict(replay_prob=0.50, train_on_generate=False, normalise_score=True, wandb_run_name=f"plr_p50_norm_{NUM_GRAD_UPDATES}"),
     "plr75": dict(replay_prob=0.75, train_on_generate=False, wandb_run_name=f"plr_p75_{NUM_GRAD_UPDATES}"),
     "plr25": dict(replay_prob=0.25, train_on_generate=False, wandb_run_name=f"plr_p25_{NUM_GRAD_UPDATES}"),
     "accel": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=1, wandb_run_name=f"accel_{NUM_GRAD_UPDATES}"),
@@ -68,6 +69,10 @@ CURRICULA = {
     # aren't evicted/forgotten. Buffer_capacity (32768, in the UEDConfig call below)
     # is shared by both and gives the retention reservoir.
     "accel_walk_smooth": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=1, edit_mode="walk", normalise_score=True, temperature=0.3, staleness_coeff=0.2, wandb_run_name=f"accel_walk_smooth_{NUM_GRAD_UPDATES}"),
+    # smooth pacing but normalise_score OFF (raw regret) -- convergence study. WARNING:
+    # without normalisation the buffer can fill with high-urn walls and the 3^(#urns)
+    # oracle solver can blow up; watch buffer/mean_urns + step time.
+    "accel_walk_smooth_nonorm": dict(replay_prob=0.50, train_on_generate=False, edit_prob=0.3, num_edits=1, edit_mode="walk", normalise_score=False, temperature=0.3, staleness_coeff=0.2, wandb_run_name=f"accel_walk_smooth_nonorm_{NUM_GRAD_UPDATES}"),
     #"plr_plain": dict(replay_prob=0.5, train_on_generate=True),
 }
 assert METHOD in CURRICULA
@@ -113,7 +118,7 @@ WARM_BUFFER_PATH = f"buffer_{WARM_START_FROM}.pt"
 # Optional Weights & Biases logging. Set WANDB_PROJECT to a project name to log
 # the per-step metrics there; leave it None to disable.
 WANDB_PROJECT = None
-WANDB_PROJECT = "arena8-capstone"
+WANDB_PROJECT = "4x4 convergence 5k"
 
 # the fixed-bin layout distribution, shared by training, eval, and viz
 gen = functools.partial(

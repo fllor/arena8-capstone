@@ -49,7 +49,7 @@ BIN_REWARD = 1.0
 # that cancels in regret; gating it on "unfinished" is what makes finishing
 # sooner actually pay, so it prices the length of a detour. Keep small relative
 # to the +1 delivery reward. Set to 0.0 to recover the old no-step-cost reward.
-STEP_COST = 0.2
+STEP_COST = 0.05
 
 # Penalty for a wasted (no-effect) action: a move that bumps a grid edge, or a
 # PICKUP/PUTDOWN that changes nothing (pick up empty / already holding; put down

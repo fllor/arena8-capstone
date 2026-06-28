@@ -35,6 +35,7 @@ from agent import ActorCriticNetwork
 from evalsuite import wall_envs
 from generate import generate
 from potteryshop import Action, collect_rollout, tree_map
+from solver import optimal_rollout
 from train import default_device
 
 WORLD_SIZE = 4  # the run.py default; bump to 5 if you trained 5x5 agents
@@ -68,28 +69,36 @@ def save_gif(frames, path, upscale, duration=100):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("agent", help="path to a saved agent .pt (run.py architecture)")
+    ap.add_argument("agent", nargs="?",
+                    help="path to a saved agent .pt (run.py architecture); "
+                         "omit when using --optimal")
+    ap.add_argument("--optimal", action="store_true",
+                    help="render the oracle's optimal trajectory instead of an agent")
     ap.add_argument("--envs", choices=["walls", "random"], default="walls")
     ap.add_argument("--grid-width", type=int, default=3,
                     help="envs per row in the grid GIF (random only; walls uses its 3)")
     ap.add_argument("--horizon", type=int, default=64, help="rollout length (steps)")
     ap.add_argument("--seed", type=int, default=3, help="random-env / sampling seed")
-    ap.add_argument("--stochastic", action="store_true",
-                    help="sample actions instead of argmax (default: deterministic)")
+    ap.add_argument("--deterministic", action="store_true",
+                    help="argmax actions instead of sampling (default: stochastic)")
     ap.add_argument("--per-env", action="store_true",
                     help="also emit one GIF per env, not just the combined grid")
     ap.add_argument("--out-dir", default="gif_out")
     args = ap.parse_args()
+    if not args.optimal and args.agent is None:
+        ap.error("pass an agent .pt, or use --optimal to render the oracle path")
 
     device = default_device()
-    net = build_net(device)
-    net.load_state_dict(torch.load(args.agent, map_location=device))
-    print(f"loaded {args.agent} on {device}")
 
     # Build the env population.
     if args.envs == "walls":
         envs = wall_envs(WORLD_SIZE)
-        grid_width = 3  # the hand-built wall set has 3 escalating levels
+        # grid the levels as wide as possible while still tiling evenly (the
+        # hand-built wall set size varies: 2 on 4x4, more on 5x5).
+        B = envs.init_items_map.shape[0]
+        grid_width = min(3, B)
+        while B % grid_width:
+            grid_width -= 1
     else:
         n = args.grid_width ** 2
         gen = functools.partial(generate, world_size=WORLD_SIZE,
@@ -97,17 +106,25 @@ def main():
         envs = gen(num_envs=n, generator=torch.Generator().manual_seed(args.seed))
         grid_width = args.grid_width
 
-    # Roll the policy out across all envs at once.
-    roll = collect_rollout(
-        env=envs.to(device), policy_fn=net.policy, num_steps=args.horizon,
-        generator=torch.Generator().manual_seed(args.seed), device=device,
-        deterministic=not args.stochastic,
-    )
+    # Roll out: either the oracle optimum, or the trained agent's policy.
+    if args.optimal:
+        roll = optimal_rollout(envs, horizon=args.horizon, device=device)
+        tag = "optimal"
+        print(f"rendering oracle optimal trajectory on {device}")
+    else:
+        net = build_net(device)
+        net.load_state_dict(torch.load(args.agent, map_location=device))
+        print(f"loaded {args.agent} on {device}")
+        roll = collect_rollout(
+            env=envs.to(device), policy_fn=net.policy, num_steps=args.horizon,
+            generator=torch.Generator().manual_seed(args.seed), device=device,
+            deterministic=args.deterministic,
+        )
+        tag = os.path.splitext(os.path.basename(args.agent))[0]
     roll = tree_map(lambda x: x.cpu(), roll)
     envs = envs.to("cpu")
 
     os.makedirs(args.out_dir, exist_ok=True)
-    tag = os.path.splitext(os.path.basename(args.agent))[0]
 
     # Combined grid GIF (one tile per env, animated together).
     grid_frames = visualise.animate_rollouts(envs[0], roll, grid_width=grid_width)

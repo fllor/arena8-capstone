@@ -32,17 +32,27 @@ Two pottery-shop specifics make this simpler than the jaxued maze editor:
   shards), so the grid graph is always fully connected and the oracle always
   returns a finite optimum -- every edit stays solvable by construction. We only
   forbid placing an item on the bin or robot-start cell.
-* **No urn cap.** The oracle's `3^(#urns)` DP factor is the only bad scaler, but
-  on the small grid urn/shard counts are hard-bounded by the cells, and the
-  solver already groups by exact `(#shards, #urns)` and chunks accordingly, so a
-  dense edited level is merely slower, never an OOM.
+* **Urn cap (toggle only).** The oracle's `3^(#urns)` DP factor is the only bad
+  scaler: under regret-keyed re-editing the count-changing `toggle` edit ratchets
+  the urn total up until a single dense level OOMs the solver (a >40GB tensor).
+  So `toggle` children are passed through `_cap_state`, which removes urns (then
+  shards) until `2^(#shards) * 3^(#urns) < _STATE_LIMIT` (~5GB solver peak,
+  mirroring the generator's cap). The bound is generous (~11 urns on 5x5), so
+  ACCEL still builds full walls. `walk` conserves the urn multiset, so its
+  children never exceed the already-capped seed and it skips the guard.
 """
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 from potteryshop import Environment, Item
+
+# Cap on the oracle DP state factor 2^(#shards) * 3^(#urns) (mirrors the
+# generator). Keeps the exact solver's peak allocation to ~5GB.
+_STATE_LIMIT = 1_000_000
 
 _NUM_ITEMS = len(Item)  # EMPTY, SHARDS, URN
 
@@ -92,12 +102,37 @@ def edit_levels(
 
     if edit_mode == "toggle":
         _toggle_edits(flat, eligible, num_edits=num_edits, generator=generator)
+        # Guard: toggle ratchets the urn count up, so keep every child within the
+        # oracle DP's affordable size (walk conserves counts and needs no cap).
+        _cap_state(flat)
     elif edit_mode == "walk":
         _walk_edits(flat, eligible, ws=ws, num_edits=num_edits, generator=generator)
     else:
         raise ValueError(f"unknown edit_mode {edit_mode!r} (expected 'toggle' or 'walk')")
 
     return envs.replace(init_items_map=items)
+
+
+def _cap_state(flat, *, limit=_STATE_LIMIT):
+    """Remove urns (then shards) per level, in place, until each satisfies
+    ``2^(#shards) * 3^(#urns) < limit`` -- the oracle DP's affordable size.
+
+    Mirrors the generator's cap on the post-edit item map: shards are bounded so
+    at least one urn always fits, then urns (which carry the larger ``3^U``
+    factor, and whose removal also offsets a large ``2^S``) are shaved by cell
+    order. Only removes items, so the robot/bin cells are never touched.
+    """
+    is_shard = flat == Item.SHARDS
+    is_urn = flat == Item.URN
+    S, U = is_shard.sum(1), is_urn.sum(1)  # [B]
+    s_keep = S.clamp(max=18)  # 2^18 * 3 < 1e6, so >= 1 urn always fits
+    excess = s_keep * math.log(2) + U * math.log(3) - math.log(limit)
+    u_keep = (U - (excess / math.log(3)).ceil().clamp(min=0).long()).clamp(min=0)
+    # drop urns/shards ranked beyond the keep counts (rank = 1-indexed cell order)
+    urn_rank = is_urn.long().cumsum(1)
+    flat[is_urn & (urn_rank > u_keep[:, None])] = int(Item.EMPTY)
+    shard_rank = is_shard.long().cumsum(1)
+    flat[is_shard & (shard_rank > s_keep[:, None])] = int(Item.EMPTY)
 
 
 def _toggle_edits(flat, eligible, *, num_edits, generator):

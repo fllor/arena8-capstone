@@ -296,6 +296,8 @@ class UEDConfig:
     # --- checkpoint ---
     checkpoint_path: str | None = None  # path to save checkpoint during training
     checkpoint_every: int = 0           # how often to save checkpoint
+    history_save_path: str | None = None # save the metrics history alongside checkpoints (resume diagnostics)
+    step_offset: int = 0                 # shift every *logged* step index by this (raw loop counter, hence eval/checkpoint cadence, is unaffected). Lets a warm-started continuation pick up the W&B x-axis exactly where the prior run left off.
     # --- weights and biases logging ---
     wandb_project: str | None = None    # project name
     wandb_run_name: str | None = None   # run name
@@ -491,6 +493,10 @@ def train_agent(
     steps = tqdm(range(config.num_train_steps))
     try:
         for step in steps:
+            # The raw `step` drives loop cadence (eval/checkpoint/diag modulo); the
+            # offset `log_step` is what gets recorded/logged, so a continuation run
+            # continues the prior run's W&B x-axis seamlessly (config.step_offset).
+            log_step = step + config.step_offset
             replay = buffer_active and sampler.sample_replay_decision()
             # DR only: the diagnostic oracle solve is skippable, so throttle it.
             # (PLR always solves every generate step for buffer admission.)
@@ -567,7 +573,7 @@ def train_agent(
             # `regret/generate`, PLR rows omit the branch they didn't take. The branch
             # above sets the PPO + regret keys; the helpers add run/buffer/eval.
             metrics.update(
-                _run_state(step, replay, num_generate, num_replay, grad_rate, rollout_rate)
+                _run_state(log_step, replay, num_generate, num_replay, grad_rate, rollout_rate)
             )
             metrics.update(_buffer_stats(sampler))
             metrics.update(cache.stats())
@@ -578,11 +584,11 @@ def train_agent(
                     horizon=num_env_steps, device=device, optima=eval_optima,
                     solved_eps=config.eval_solved_eps,
                 ))
-                line = _eval_summary_line(step, metrics, config.eval_sets)
+                line = _eval_summary_line(log_step, metrics, config.eval_sets)
                 tqdm.write(line)
             history.append(metrics)
             if wandb_run is not None:
-                wandb_run.log(metrics, step=step)
+                wandb_run.log(metrics, step=log_step)
             postfix = _progress_postfix(metrics, sampler, replay)
             steps.set_postfix(postfix)
             if (
@@ -595,6 +601,8 @@ def train_agent(
                 if config.buffer_save_path and sampler is not None:
                     sampler.save(config.buffer_save_path)
                 cache.save()
+                if config.history_save_path:
+                    torch.save(history, config.history_save_path)
     finally:
         if wandb_run is not None:
             wandb_run.finish()
@@ -602,5 +610,7 @@ def train_agent(
     if config.buffer_save_path and sampler is not None:
         sampler.save(config.buffer_save_path)
     cache.save()
+    if config.history_save_path:
+        torch.save(history, config.history_save_path)
 
     return net, history, sampler

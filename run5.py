@@ -72,8 +72,22 @@ CURRICULA = {
 }
 assert METHOD in CURRICULA
 assert NUM_GRAD_UPDATES > 0
-curriculum = CURRICULA[METHOD]
+curriculum = dict(CURRICULA[METHOD])  # copy so per-run tweaks don't mutate CURRICULA
 RUN_NAME = curriculum["wandb_run_name"]
+
+# ====================== ACCEL CONTINUATION RUN ==================================
+# Continue the finished ACCEL run (accel_walk_5000_nonorm) for another 5000 DR-
+# equivalent gradient updates (-> 10000 plr steps, logged 10000-20000 via
+# STEP_OFFSET) to test whether its still-rising trajectory (regret 1.18->0.72,
+# break ->0.94 over its last 2000 steps) converges to a fully-solved state. Warm-
+# starts agent + buffer + cache from the checkpoint. Run `python run5.py accel_walk 5000`.
+ENTROPY_COEFF = 0.01
+STEP_OFFSET = 10000
+NORMALISE_SCORE = False
+RUN_NAME = "accel_walk_5000_nonorm_cont"
+curriculum["wandb_run_name"] = RUN_NAME
+curriculum["normalise_score"] = NORMALISE_SCORE
+# =================================================================================
 print("Run:", RUN_NAME)
 
 # Mean shard/urn COUNT per env (each floored at 1, drawn from a truncated
@@ -98,15 +112,24 @@ urn_mean = 1.3
 # from).
 MODEL_PATH = f"agent_{RUN_NAME}.pt"
 BUFFER_PATH = f"buffer_{RUN_NAME}.pt"
+HISTORY_PATH = f"history_{RUN_NAME}.pt"
 LOAD_AGENT = False
+
+# Checkpoint cadence: every CHECKPOINT_EVERY steps `train_agent` rewrites the
+# agent (MODEL_PATH), buffer (BUFFER_PATH), metrics history (HISTORY_PATH), and
+# the oracle solver cache (SOLVER_CACHE_DIR) so a crashed run can be relaunched
+# (set WARM_START=True) without losing progress. The solver cache is shared
+# across runs (keyed by reward config) so DR/PLR/ACCEL warm each other's solves.
+CHECKPOINT_EVERY = 100
+SOLVER_CACHE_DIR = "solver_cache"
 
 # Warm-start: load a saved agent + buffer *before* training and continue from
 # there (test (3): branch a capacity sweep off one checkpoint instead of
 # re-running 0->plateau each time). Point WARM_START_FROM at a different run name
 # to read its checkpoint without overwriting it -- this run still saves to
 # MODEL_PATH / BUFFER_PATH above. Ignored when LOAD_AGENT is True.
-WARM_START = False
-WARM_START_FROM = RUN_NAME
+WARM_START = True                       # CONTINUATION: warm-start the finished ACCEL run
+WARM_START_FROM = "accel_walk_5000_nonorm"
 WARM_MODEL_PATH = f"agent_{WARM_START_FROM}.pt"
 WARM_BUFFER_PATH = f"buffer_{WARM_START_FROM}.pt"
 
@@ -161,12 +184,21 @@ config = UEDConfig(
     num_minibatches=32,
     buffer_capacity=32768,
     lr=0.003,  # large batch permits greater learning rate
+    entropy_coeff=ENTROPY_COEFF,
+    step_offset=STEP_OFFSET,
     device=device,
     seed=1,
     eval_sets=eval_sets,
     # Warm-start the buffer from a saved snapshot (refit to buffer_capacity above)
     # when WARM_START is on; ignored for DR (no buffer) and when loading-only.
     buffer_load_path=WARM_BUFFER_PATH if (WARM_START and not LOAD_AGENT) else None,
+    # Periodic crash-safe checkpointing: agent + buffer + history + solver cache
+    # every CHECKPOINT_EVERY steps (relaunch a failed run via WARM_START).
+    checkpoint_path=MODEL_PATH,
+    checkpoint_every=CHECKPOINT_EVERY,
+    buffer_save_path=BUFFER_PATH,
+    history_save_path=HISTORY_PATH,
+    solver_cache_dir=SOLVER_CACHE_DIR,
     wandb_project=WANDB_PROJECT,
     #wandb_run_name=METHOD,
     **curriculum,

@@ -20,6 +20,8 @@ an 8k-env batch yet remain possible.
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 from potteryshop import Environment, Item
@@ -102,6 +104,14 @@ def generate(
     num_urns = _sample_counts(urn_mean, num_envs, generator)
     num_shards = num_shards.clamp(max=capacity - 1)  # leave room for >= 1 urn
     num_urns = torch.minimum(num_urns, capacity - num_shards)
+    # Cap the oracle DP state factor 2^shards * 3^urns below 1e6 so the exact
+    # solver can never OOM on a dense tail draw (a single >40GB tensor, seen
+    # mid-PLR). Bound shards first so >=1 urn always fits (2^18 * 3 < 1e6), then
+    # shave urns to absorb the rest -- dropping urns also offsets a large
+    # 2^shards. Touches ~1e-6 of the distribution, so training is unaffected.
+    num_shards = num_shards.clamp(max=18)
+    excess = num_shards * math.log(2) + num_urns * math.log(3) - math.log(1e6)
+    num_urns = (num_urns - (excess / math.log(3)).ceil().clamp(min=0).long()).clamp(min=1)
 
     num_shards = num_shards.to(device)
     num_urns = num_urns.to(device)

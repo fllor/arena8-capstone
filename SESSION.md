@@ -1,6 +1,6 @@
 # Session handoff — 5x5 GMG + regret-UED experiments
 
-**Status as of:** 2026-06-28 (late). **Branch:** `experiments-5x5-ued` (commit history under it; not pushed). **Update this file as runs complete / state changes.**
+**Status as of:** 2026-06-29. **Branch:** `experiments-5x5-ued` (commit history under it; not pushed). **Update this file as runs complete / state changes.**
 
 Goal: show goal-misgeneralisation (GMG) in the pottery-shop gridworld and mitigate it
 with regret-based UED. Headline story confirmed: **DR (GMG fails) < PLR (partial fix)
@@ -71,22 +71,33 @@ agent/buffer/history `.pt`, `history_eval_*.csv`, `run_*.log`).
 
 ---
 
-## IN-PROGRESS runs (commit artifacts as they finish)
+## PLR variance runs (COMPLETE) — `data5/remote_var{,_luna}/`
+Two boxes (octavia seeds 2-9, luna seeds 10-17) ran fresh non-norm PLR, 10000 steps,
+net-init+train seed = SEED, logging to the user's W&B. **Loops stopped after one seed
+each ("no time"); no further seeds.** Final eval (step 10000), with the original
+seed-1 PLR for comparison:
 
-### Local — ACCEL continuation
-- Run `accel_walk_5000_nonorm_cont`, warm-started from `accel_walk_5000_nonorm`
-  (agent+buffer+cache), `step_offset=10000`, +10000 steps (logged 10000->20000).
-- Tests whether ACCEL's still-rising trajectory converges to fully-solved (regret->0,
-  break->1). Log: `run_accel_cont.log`. W&B run `jbjavv6h`. ~10-11h total.
-- Saves: `agent_/buffer_/history_accel_walk_5000_nonorm_cont.pt`.
+| run | wall regret (stoch) | wall break | buf_urns | W&B |
+|---|---|---|---|---|
+| seed 1 (orig `plr_p50_5000`) | 1.60 | 0.59 | 2.54 | — |
+| seed 2 (octavia) | **2.26** | **0.41** | 2.54 | `v6deksg7` |
+| seed 10 (luna) | **1.25** | **0.81** | 2.53 | `0hvf47gw` |
 
-### Remote (arena8-octavia) — PLR variance runs
-- `var_loop.sh` runs `var_run.py <seed> 5000` for seeds 2..9 back-to-back until killed.
-  Each = fresh non-norm PLR, 10000 steps; both net-init and train seed = SEED.
-- Logs to **user's W&B** (`arena8-capstone-5x5`), key injected (see infra). seed2 = run
-  `v6deksg7`. Goal: characterise PLR run-to-run variance (is "forgetting" robust?).
-- Each 10k run ~9-10h => expect only 1-2 to finish before timeout.
-- Results auto-synced to `data5/remote_var/` every 20 min by a local loop.
+=> **Large run-to-run variance confirmed** (break 0.41 vs 0.81 vs 0.59 at the same
+budget/config). PLR's outcome is a high-variance draw, not a stable result — the
+single-seed "peak-then-forget" story is one realisation among a wide spread. Buffer
+enrichment is consistent (~2.5 urns) across seeds; the *policy* is what varies.
+Artifacts (agent/buffer/history/log) committed under `data5/remote_var/` (seed2) and
+`data5/remote_var_luna/` (seed10).
+
+## IN-PROGRESS
+### Local — ACCEL continuation (`accel_walk_5000_nonorm_cont`)
+- Warm-started from `accel_walk_5000_nonorm`, `step_offset=10000`, +10000 steps
+  (logged 10000->20000). W&B `jbjavv6h`. Log `run_accel_cont.log`. ~near done.
+- **Preliminary: NOT converging — regressing.** As the editor over-densified the
+  buffer (buf_urns 5.5 -> ~8), wall break/regret oscillated badly and degraded
+  (eval ~regret 2.3-2.4 / break 0.2-0.8). So "more ACCEL steps -> fully solved" looks
+  false; the over-hard self-built curriculum hurts. Confirm trajectory at completion.
 
 ---
 

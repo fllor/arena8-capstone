@@ -90,26 +90,22 @@ enrichment is consistent (~2.5 urns) across seeds; the *policy* is what varies.
 Artifacts (agent/buffer/history/log) committed under `data5/remote_var/` (seed2) and
 `data5/remote_var_luna/` (seed10).
 
-## ACCEL continuation (`accel_walk_5000_nonorm_cont`) — RUNNING (~done), partial committed
+## ACCEL continuation (`accel_walk_5000_nonorm_cont`) — DONE
 - Warm-started from `accel_walk_5000_nonorm`, `step_offset=10000`, +10000 steps
-  (logged 10000->20000). W&B `jbjavv6h`. Log `run_accel_cont.log`. Artifacts in
-  `data5/` (`*_accel_walk_5000_nonorm_cont.*`) at the latest 100-step checkpoint.
-- **Finding: oscillating plateau, NO clean convergence.** Windowed wall regret/break
-  over the continuation:
-
-  | logged step | wall regret | break |
-  |---|---|---|
-  | 10-11k | 1.74 | 0.54 |
-  | 12-13k | **0.63** | **0.98** (best, ~solved) |
-  | 16-17k | 0.62 | 0.84 |
-  | 18-19k | 1.98 | 0.45 (worst) |
-  | 19-20k | 0.95 | 0.92 |
-
-  More ACCEL steps do **not** drive it to fully-solved (regret->0); it swings between
-  ~0.6 (near-solved) and ~2.0 (degraded) — the same buffer-churn instability as PLR.
-  (`buf_urns` ~6.6-8; the editor over-densifies.) NB: an earlier "monotonic regression"
-  read was a single noisy eval point — always window (~1000 steps), never trust one
-  eval. Will refresh artifacts + this section if the run finishes in time.
+  (logged 10000->20000, finished). W&B `jbjavv6h`. Artifacts in `data5/`
+  (`*_accel_walk_5000_nonorm_cont.*` + `history_eval_accel_walk_5000_nonorm_cont.csv`).
+- **Verdict: oscillating plateau; NO clean convergence, but a modestly better best/endpoint.**
+  Windowed wall regret/break over the continuation: 10-11k 1.74/0.54, 11-12k 1.21/0.81,
+  **12-13k 0.63/0.98 (best, ~solved)**, 13-15k ~0.78/0.90, 15-16k 0.89/0.80, 16-17k 0.62/0.84,
+  17-18k 1.38/0.66, **18-19k 1.98/0.45 (worst)**, 19-20k 0.93/0.91, final step 20000
+  **0.66/0.85** (greedy-grid wall regret **0.564** vs original ACCEL greedy 2.09; random
+  regret stays ~0.02-0.03).
+- So **more ACCEL steps do NOT lock in a fully-solved policy** — it keeps swinging
+  ~0.6 (near-solved) <-> ~2.0 (degraded); the editor over-densifies (`buf_urns` ~7) and
+  the buffer churn destabilises the policy, same late-instability as PLR. The better
+  windows + endpoint *do* beat the original ACCEL final, so extra compute raises the
+  achievable best but doesn't stabilise it. **Headline takeaway: regret-UED mitigates GMG
+  (ACCEL best) but is unstable late on this task — report best/windowed, not a single final.**
 
 ---
 

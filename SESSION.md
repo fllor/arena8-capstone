@@ -1,142 +1,70 @@
-# Session handoff — 5x5 GMG + regret-UED experiments
+# 5x5 GMG + regret-UED — results summary
 
-**Status as of:** 2026-06-29. **Branch:** `experiments-5x5-ued` (commit history under it; not pushed). **Update this file as runs complete / state changes.**
+Goal: demonstrate **goal misgeneralisation (GMG)** in the pottery-shop gridworld and
+mitigate it with **regret-based UED**. Result: **DR (GMG) < PLR < ACCEL** on wall
+behaviour, with ACCEL's adversarial editor learning to build the urn-walls.
 
-Goal: show goal-misgeneralisation (GMG) in the pottery-shop gridworld and mitigate it
-with regret-based UED. Headline story confirmed: **DR (GMG fails) < PLR (partial fix)
-< ACCEL (best)**, with the ACCEL buffer demonstrably *building* urn-walls.
+## Configuration
+- Env: 5x5, fixed bin; `shard_mean=1.7`, `urn_mean=1.3` (geometric, floored at 1).
+- Reward: `BREAK_PENALTY=3.0`, `STEP_COST=0.02`, `SHAPING_COEFF=0.5`, `BIN_REWARD=1.0`,
+  `WASTE_PENALTY=0.0`, `DISCOUNT_RATE=0.995`.
+- PPO: `num_envs=4096`, `num_env_steps=64`, `num_epochs=1`, `num_minibatches=32`,
+  `lr=0.003`, `entropy_coeff=0.01`, `buffer_capacity=32768`.
+- Oracle DP-size cap `2^shards * 3^urns < 1e6` (in `generate.py` + the walk editor)
+  keeps the exact regret solver tractable.
+- Methods: **DR** `replay_prob=0`; **PLR** `replay_prob=0.5, train_on_generate=False`,
+  raw regret; **ACCEL** = PLR + walk editor (`edit_prob=0.3, num_edits=1`), raw regret.
+  Budget = 5000 gradient updates each.
 
----
-
-## Fixed configuration (all runs unless noted)
-- **Reward** (`rewards.py`): `BREAK_PENALTY=3.0`, `SHAPING_COEFF=0.5`, `BIN_REWARD=1.0`,
-  `STEP_COST=0.02`, `WASTE_PENALTY=0.0`, `DISCOUNT_RATE=0.995`.
-- **Env**: `world_size=5`, `shard_mean=1.7`, `urn_mean=1.3` (geometric, floored at 1).
-- **PPO/UED** (`run5.py` / `var_run.py`): `num_envs=4096`, `num_env_steps=64`,
-  `num_epochs=1`, `num_minibatches=32`, `buffer_capacity=32768`, `lr=0.003`,
-  `entropy_coeff=0.01`, `seed=1` (local runs).
-- **Solver OOM cap** (critical): `generate.py` clamps every level to
-  `2^shards * 3^urns < 1e6` (reduce urns first); `editor.py` `_cap_state` guards
-  toggle-mode urn ratchet. Without this the exact oracle DP OOMs on dense tail levels
-  (a single >40GB tensor). Walk-mode edits conserve urns and need no cap.
-- **Step budget convention**: CLI arg = DR-equivalent *gradient updates*. DR
-  `replay_prob=0` -> steps = arg. PLR/ACCEL `replay_prob=0.5` -> steps = 2*arg.
-  So `plr50 5000` and `accel_walk 5000` run 10000 steps = 5000 grad updates.
-
-## Methods (curricula in `run5.py`)
-- **DR**: `replay_prob=0`, train every step. (`dr`)
-- **PLR (-bot)**: `replay_prob=0.5`, `train_on_generate=False`, raw regret. (`plr50`)
-- **ACCEL**: PLR + walk editor `edit_prob=0.3, num_edits=1, edit_mode="walk"`, raw
-  regret. (`accel_walk`) — **normalisation OFF** (see findings).
-
----
-
-## Completed runs + headline (all artifacts in `data5/`)
-
-Three-way, final-window means (DR at 4000-5000; PLR/ACCEL at 8000-10000 = equal grad budget):
+## Headline results (equal gradient budget, final-window means)
 
 | metric | DR | PLR | ACCEL |
 |---|---|---|---|
-| wall regret (stoch) | 2.91 | 1.60 | **0.95** |
+| wall regret (stochastic) | 2.91 | 1.60 | **0.95** |
 | wall regret (greedy) | 2.92 | 2.80 | **2.09** |
 | wall break rate | 0.04 | 0.59 | **0.86** |
-| random regret (in-dist) | 0.010 | 0.010 | 0.026 |
-| buffer mean urns | — | 2.54 | **5.48** |
+| in-distribution (random) regret | 0.010 | 0.010 | 0.026 |
+| buffer mean urns | — | 2.5 | **5.5** |
 
-`data5/` run names: `dr_5000`, `plr_p50_5000`, `accel_walk_5000_nonorm` (+ each has
-agent/buffer/history `.pt`, `history_eval_*.csv`, `run_*.log`).
+- **DR misgeneralises**: competent in-distribution (regret 0.01) but never breaks the
+  deployment urn-walls (break 0.04, regret 2.9) — it competently takes the long way around.
+- **PLR partially fixes** it (break 0.59).
+- **ACCEL is strongest**: lowest wall regret, highest break, and its editor *builds*
+  walls — buffer mean urns 5.5 vs PLR's 2.5.
+
+## PLR run-to-run variance (3 independent seeds, identical config)
+
+| seed | wall regret | break |
+|---|---|---|
+| 1 | 1.60 | 0.59 |
+| 2 | 2.26 | 0.41 |
+| 10 | 1.25 | 0.81 |
+
+PLR's outcome is **high-variance** (break 0.41–0.81 at identical config). Buffer
+enrichment is consistent (~2.5 urns) across seeds — the **policy** is what varies.
+
+## Extended ACCEL (5000 -> 10000 gradient updates)
+Final: stochastic wall regret **0.66 / break 0.85**, greedy wall regret **0.56**, random
+regret 0.02. The trajectory **oscillates** (~0.6 near-solved ↔ ~2.0 degraded) and does
+**not** converge to a stable fully-solved policy; extra compute raises the achievable
+best but does not stabilise it.
 
 ## Key findings
-1. **Opposite temporal dynamics (the real story).** PLR *peaks early then forgets*:
-   wall regret 0.48 / break 1.00 at step ~2500, degrading to 1.83 / 0.50 by 10000
-   (buffer keeps enriching: buf_urns 1.3->2.56). ACCEL *learns slowly then converges*:
-   regret ~2.4 through step 8000, dropping to 0.72 / break 0.94 by step 10000, and
-   **still improving at the cutoff** (buf_urns ->5.7). => final-window numbers undersell
-   both. Use windowed (~300-500 step) eval, never single points (they swing 0.2->2.0).
-2. **Normalisation hurts — killed.** `plr_p50_5000_norm` killed at step 1294.
-   `normalise_score` divides regret by `(optimal - worst_return)`, which is ~3x larger
-   for a 5-6 urn wall than a sparse level, so it *deprioritises the urn-walls* in the
-   buffer. Confirmed: buf_urns lagged (1.90 vs non-norm 2.17 at matched step), 4x worse
-   wall regret. **Preferred setting: normalisation OFF** (carried into ACCEL).
-3. **Entropy is load-bearing.** `plr_p50_5000_ent0`: fine-tuning the step-10000 PLR
-   agent with `entropy_coeff=0` for 1000 steps *regressed* wall break 0.78->0.22 (policy
-   sharpened toward the majority "walk-around" mode). Keep `entropy_coeff=0.01`.
-4. **CUDA non-determinism => PLR is high-variance.** A fresh seed-1 PLR
-   (`plr_p50_peak2500`) did NOT reproduce the original trajectory (break ~0.67 vs 1.0
-   at step 2500). The **buffer reproduces** (CPU-deterministic sampling + exact oracle),
-   the **policy does not** (non-deterministic GPU kernels, amplified by RL chaos).
-   Divergence visible by ~step 1000 (regret metric by ~300-500). => the single-seed
-   "PLR forgets" claim needs multiple seeds (in progress). `peak2500` agent is NOT a
-   peak; capturing a true peak needs save-best-eval-checkpoint logic (not yet built).
+1. **GMG reproduced and mitigated**: DR < PLR < ACCEL on both wall regret and break rate;
+   ACCEL's adversarial editor builds the rare urn-walls random generation almost never
+   produces (buffer 5.5 vs PLR 2.5 mean urns).
+2. **Regret-UED is unstable late** on this task: PLR's wall performance peaks early then
+   degrades, and ACCEL oscillates. Report windowed/best performance, not a single final
+   eval (single eval points swing 0.2–2.0).
+3. **PLR is high-variance** run-to-run; multiple seeds are needed for any quantitative claim.
+4. **Score normalisation hurts**: ranking buffer levels by `regret/(optimal-worst)`
+   deprioritises urn-walls (their achievable range is ~3x larger than a sparse level's),
+   slowing wall learning. Use **raw** regret.
+5. **The entropy bonus is load-bearing**: removing it collapses the agent back toward the
+   non-breaking proxy (break 0.78 -> 0.22).
 
----
-
-## PLR variance runs (COMPLETE) — `data5/remote_var{,_luna}/`
-Two boxes (octavia seeds 2-9, luna seeds 10-17) ran fresh non-norm PLR, 10000 steps,
-net-init+train seed = SEED, logging to the user's W&B. **Loops stopped after one seed
-each ("no time"); no further seeds.** Final eval (step 10000), with the original
-seed-1 PLR for comparison:
-
-| run | wall regret (stoch) | wall break | buf_urns | W&B |
-|---|---|---|---|---|
-| seed 1 (orig `plr_p50_5000`) | 1.60 | 0.59 | 2.54 | — |
-| seed 2 (octavia) | **2.26** | **0.41** | 2.54 | `v6deksg7` |
-| seed 10 (luna) | **1.25** | **0.81** | 2.53 | `0hvf47gw` |
-
-=> **Large run-to-run variance confirmed** (break 0.41 vs 0.81 vs 0.59 at the same
-budget/config). PLR's outcome is a high-variance draw, not a stable result — the
-single-seed "peak-then-forget" story is one realisation among a wide spread. Buffer
-enrichment is consistent (~2.5 urns) across seeds; the *policy* is what varies.
-Artifacts (agent/buffer/history/log) committed under `data5/remote_var/` (seed2) and
-`data5/remote_var_luna/` (seed10).
-
-## ACCEL continuation (`accel_walk_5000_nonorm_cont`) — DONE
-- Warm-started from `accel_walk_5000_nonorm`, `step_offset=10000`, +10000 steps
-  (logged 10000->20000, finished). W&B `jbjavv6h`. Artifacts in `data5/`
-  (`*_accel_walk_5000_nonorm_cont.*` + `history_eval_accel_walk_5000_nonorm_cont.csv`).
-- **Verdict: oscillating plateau; NO clean convergence, but a modestly better best/endpoint.**
-  Windowed wall regret/break over the continuation: 10-11k 1.74/0.54, 11-12k 1.21/0.81,
-  **12-13k 0.63/0.98 (best, ~solved)**, 13-15k ~0.78/0.90, 15-16k 0.89/0.80, 16-17k 0.62/0.84,
-  17-18k 1.38/0.66, **18-19k 1.98/0.45 (worst)**, 19-20k 0.93/0.91, final step 20000
-  **0.66/0.85** (greedy-grid wall regret **0.564** vs original ACCEL greedy 2.09; random
-  regret stays ~0.02-0.03).
-- So **more ACCEL steps do NOT lock in a fully-solved policy** — it keeps swinging
-  ~0.6 (near-solved) <-> ~2.0 (degraded); the editor over-densifies (`buf_urns` ~7) and
-  the buffer churn destabilises the policy, same late-instability as PLR. The better
-  windows + endpoint *do* beat the original ACCEL final, so extra compute raises the
-  achievable best but doesn't stabilise it. **Headline takeaway: regret-UED mitigates GMG
-  (ACCEL best) but is unstable late on this task — report best/windowed, not a single final.**
-
----
-
-## Infrastructure
-- **Remote box**: `ssh arena8-octavia` (same GPU/timeout as local). Deps `jaxtyping`,
-  `einops` installed. Code + `solver_cache/` (88M, warms solves) + `sprites.png` in
-  `~/capstone-florian`. W&B: machine's own netrc is account `dquarel`; we inject the
-  user's key from `~/capstone-florian/.wandb_key` (0600) via `WANDB_API_KEY` for the
-  loop only (dquarel netrc untouched).
-  - **Relaunch the loop**: `cd ~/capstone-florian && export WANDB_API_KEY=$(cat .wandb_key)
-    && nohup bash var_loop.sh > var_loop.out 2>&1 < /dev/null &`
-- **Local->local sync of remote results**: background loop, every 20 min, rsyncs
-  `history_/agent_/buffer_plr_p50_seed*.pt` + `run_seed*.log` to `data5/remote_var/`.
-- **Checkpointing**: every 100 steps each run rewrites agent + buffer + history +
-  shared `solver_cache/`. A crashed/continued run resumes via `WARM_START`.
-
-## How to resume after the machine dies
-1. All completed artifacts are committed under `data5/` on branch `experiments-5x5-ued`.
-2. To **continue any run**: in `run5.py` set `WARM_START=True`, `WARM_START_FROM=<run name>`,
-   and a `STEP_OFFSET` = the run's last logged step (for a seamless W&B curve); launch the
-   same method/budget. Buffer+cache load automatically.
-3. `run5.py` is currently in the **ACCEL-continuation** config block (warm-start from
-   `accel_walk_5000_nonorm`). Revert the marked block for a fresh run.
-4. Remote variance agents land two levels deep (`data5/remote_var/agent_*.pt`) where
-   `.gitignore`'s `!*/*.pt` doesn't reach — `git add -f` them when committing.
-
-## Open questions / next steps
-- Does ACCEL converge to regret->0 / break->1 with more steps? (continuation running)
-- Is PLR's "peak-then-forget" robust across seeds, or just high variance? (variance runs)
-- *Why* does PLR forget — buffer/curriculum drift, staleness, LR? (not yet diagnosed)
-- Multi-seed error bars on the DR/PLR/ACCEL headline (single-seed so far).
-- Build save-best-eval-checkpoint to capture a true PLR peak agent for forensics.
-- The greedy-vs-stochastic eval gap (PLR's greedy advantage over DR is small) — eval set
-  is only 27 walls; consider a larger held-out wall set + averaged rollouts for less noise.
+## Artifacts (`data5/`)
+Per run: agent + buffer + training-history + eval-CSV + log.
+- `dr_5000`, `plr_p50_5000`, `accel_walk_5000_nonorm`, `accel_walk_5000_nonorm_cont`
+- `plr_p50_5000_ent0` (entropy-0), `plr_p50_5000_norm` (normalised), `plr_p50_peak2500`
+- PLR variance seeds 2 and 10: `data5/remote_var/`, `data5/remote_var_luna/`

@@ -90,14 +90,26 @@ enrichment is consistent (~2.5 urns) across seeds; the *policy* is what varies.
 Artifacts (agent/buffer/history/log) committed under `data5/remote_var/` (seed2) and
 `data5/remote_var_luna/` (seed10).
 
-## IN-PROGRESS
-### Local — ACCEL continuation (`accel_walk_5000_nonorm_cont`)
+## ACCEL continuation (`accel_walk_5000_nonorm_cont`) — RUNNING (~done), partial committed
 - Warm-started from `accel_walk_5000_nonorm`, `step_offset=10000`, +10000 steps
-  (logged 10000->20000). W&B `jbjavv6h`. Log `run_accel_cont.log`. ~near done.
-- **Preliminary: NOT converging — regressing.** As the editor over-densified the
-  buffer (buf_urns 5.5 -> ~8), wall break/regret oscillated badly and degraded
-  (eval ~regret 2.3-2.4 / break 0.2-0.8). So "more ACCEL steps -> fully solved" looks
-  false; the over-hard self-built curriculum hurts. Confirm trajectory at completion.
+  (logged 10000->20000). W&B `jbjavv6h`. Log `run_accel_cont.log`. Artifacts in
+  `data5/` (`*_accel_walk_5000_nonorm_cont.*`) at the latest 100-step checkpoint.
+- **Finding: oscillating plateau, NO clean convergence.** Windowed wall regret/break
+  over the continuation:
+
+  | logged step | wall regret | break |
+  |---|---|---|
+  | 10-11k | 1.74 | 0.54 |
+  | 12-13k | **0.63** | **0.98** (best, ~solved) |
+  | 16-17k | 0.62 | 0.84 |
+  | 18-19k | 1.98 | 0.45 (worst) |
+  | 19-20k | 0.95 | 0.92 |
+
+  More ACCEL steps do **not** drive it to fully-solved (regret->0); it swings between
+  ~0.6 (near-solved) and ~2.0 (degraded) — the same buffer-churn instability as PLR.
+  (`buf_urns` ~6.6-8; the editor over-densifies.) NB: an earlier "monotonic regression"
+  read was a single noisy eval point — always window (~1000 steps), never trust one
+  eval. Will refresh artifacts + this section if the run finishes in time.
 
 ---
 

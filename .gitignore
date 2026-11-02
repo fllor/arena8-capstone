@@ -6,3 +6,9 @@ wandb
 # persistent oracle solver cache (binary, machine-local; rebuilt on demand)
 cache_*.pt
 */cache_*.pt
+
+# local / tooling artefacts
+.env
+*.log
+.ipynb_checkpoints/
+.DS_Store

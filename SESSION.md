@@ -90,9 +90,18 @@ resulting churn destabilises the policy. **This run's endpoint must not be read 
 - Cheapest way to cut the dominant (within-run) noise: a **larger held-out wall set +
   averaged rollouts**, not more seeds.
 
-## Artifacts (`data5/`)
-Per run: agent + buffer + training-history + eval-CSV/log.
-- `dr_5000`, `plr_p50_5000` (seed 1), `accel_walk_5000_nonorm`, `accel_walk_5000_nonorm_cont`
-- PLR variance seeds 2, 10: `data5/remote_var/`, `data5/remote_var_luna/`
-- Exploratory, not used for results: `plr_p50_5000_ent0`, `plr_p50_5000_norm`,
-  `plr_p50_peak2500`
+## Artifacts
+5x5 runs kept in `data5/` (agent checkpoint + eval CSV each, single seed 1):
+`dr_5000`, `plr_p50_5000`, `accel_walk_5000_nonorm`.
+
+The following runs are quoted above but are **not included in the repo** (removed to keep it
+small; they remain in git history): PLR variance seeds 2 and 10, the ACCEL continuation
+(5000 -> 10000 updates), and the exploratory entropy / score-normalisation / early-peak PLR
+runs. Treat the multi-seed spreads, the extended-ACCEL and the normalisation findings as
+reported results without bundled checkpoints.
+
+4x4 runs behind `plot.png` (single seed): checkpoints in `data/`, regret curves in `plot/`.
+- DR: `agent_dr_5k.pt` -> `plot/1_dr.csv` (first 1000 updates)
+- PLR (raw score): `agent_plr_p50_5k.pt` -> `plot/2_plr_abs.csv`
+- PLR (score normalised): `agent_plr_p50_5000.pt` -> `plot/3_plr_norm.csv`
+- ACCEL: `agent_accel_walk_smooth_1000.pt` -> `plot/4_accel.csv`

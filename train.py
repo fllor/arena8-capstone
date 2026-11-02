@@ -597,7 +597,7 @@ def train_agent(
                 and step > 0
                 and step % config.checkpoint_every == 0
             ):
-                torch.save(net.state_dict(), config.checkpoint_path)
+                torch.save(net.state_dict(), config.checkpoint_path.format(step=step))  # '{step}' optional
                 if config.buffer_save_path and sampler is not None:
                     sampler.save(config.buffer_save_path)
                 cache.save()

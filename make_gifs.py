@@ -37,13 +37,13 @@ from generate import generate
 from potteryshop import Action, collect_rollout, tree_map
 from train import default_device
 
-WORLD_SIZE = 4  # the run.py default; bump to 5 if you trained 5x5 agents
+WORLD_SIZE = 4  # the run.py default; override per-agent with --world-size
 
 
-def build_net(device):
+def build_net(device, world_size):
     """Rebuild the run.py architecture and load saved weights into it."""
     return ActorCriticNetwork.init(
-        obs_height=WORLD_SIZE, obs_width=WORLD_SIZE,
+        obs_height=world_size, obs_width=world_size,
         net_channels=16, net_width=64,
         num_conv_layers=5, num_dense_layers=2,
         num_actions=len(Action),
@@ -69,6 +69,8 @@ def save_gif(frames, path, upscale, duration=100):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("agent", help="path to a saved agent .pt (run.py architecture)")
+    ap.add_argument("--world-size", type=int, default=WORLD_SIZE,
+                    help="grid size the agent was trained on (4 or 5)")
     ap.add_argument("--envs", choices=["walls", "random"], default="walls")
     ap.add_argument("--grid-width", type=int, default=3,
                     help="envs per row in the grid GIF (random only; walls uses its 3)")
@@ -82,17 +84,17 @@ def main():
     args = ap.parse_args()
 
     device = default_device()
-    net = build_net(device)
+    net = build_net(device, args.world_size)
     net.load_state_dict(torch.load(args.agent, map_location=device))
     print(f"loaded {args.agent} on {device}")
 
     # Build the env population.
     if args.envs == "walls":
-        envs = wall_envs(WORLD_SIZE)
+        envs = wall_envs(args.world_size)
         grid_width = 3  # the hand-built wall set has 3 escalating levels
     else:
         n = args.grid_width ** 2
-        gen = functools.partial(generate, world_size=WORLD_SIZE,
+        gen = functools.partial(generate, world_size=args.world_size,
                                 shard_mean=1.7, urn_mean=1.3)
         envs = gen(num_envs=n, generator=torch.Generator().manual_seed(args.seed))
         grid_width = args.grid_width

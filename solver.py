@@ -51,7 +51,7 @@ from jaxtyping import Float, Int
 from torch import Tensor
 
 import rewards
-from potteryshop import Action, Environment, Item
+from potteryshop import Action, Environment, Item, Rollout, Transition, _stack
 from rewards import DISCOUNT_RATE
 
 # The solver mirrors `rewards.reward2` exactly. Rather than copy the tunable
@@ -426,6 +426,73 @@ def compute_regret(
     """
     optimal = compute_optimal_return(envs, **kwargs)
     return optimal - policy_returns.detach().cpu().float()
+
+
+@torch.no_grad()
+def optimal_rollout(
+    envs: Environment,
+    *,
+    horizon: int = 64,
+    discount: float = DISCOUNT_RATE,
+    break_penalty: float | None = None,
+    per_step_cost: float | None = None,
+    shaping_coeff: float | None = None,
+    waste_penalty: float | None = None,
+    bin_reward: float | None = None,
+    device: torch.device | str | None = None,
+) -> Rollout:
+    """
+    The oracle's *optimal* trajectory per level, as a `Rollout` ready for
+    `visualise.animate_rollouts` -- "what the agent should have done".
+
+    Same machinery as `_validate`: backward-induct the full value stack, then
+    roll the greedy optimum through the *real* env (so the rendered states are
+    genuine `potteryshop.step` results, not the compact DP model's). The reward
+    knobs default to the live `rewards.*` globals, matching the regret solver, so
+    this optimum is scored under exactly the reward the run trained against.
+
+    The DP horizon equals `horizon`, so the trajectory is optimal *within* that
+    step budget -- give it enough steps for the optimal route to finish.
+    """
+    break_penalty = rewards.BREAK_PENALTY if break_penalty is None else break_penalty
+    per_step_cost = rewards.STEP_COST if per_step_cost is None else per_step_cost
+    shaping_coeff = rewards.SHAPING_COEFF if shaping_coeff is None else shaping_coeff
+    waste_penalty = rewards.WASTE_PENALTY if waste_penalty is None else waste_penalty
+    bin_reward = rewards.BIN_REWARD if bin_reward is None else bin_reward
+    device = torch.device(device) if device is not None else torch.device("cpu")
+
+    B = envs.num_envs
+    shard_slot, urn_slot, init_shardmask, init_urncode, robot_cell, bin_cell, S, U, C, W = (
+        _layout_tables(envs, device)
+    )
+    next_idx, reward, M_shard, M_urn, N = _build_transitions(
+        shard_slot, urn_slot, bin_cell, S, U, C, W, discount, break_penalty,
+        per_step_cost, shaping_coeff, waste_penalty, bin_reward, device,
+    )
+    # backward induction, keeping every V_t to recover the greedy action per step
+    V_stack = [torch.zeros((B, N), dtype=torch.float32, device=device)]
+    flat_idx = next_idx.reshape(B, N * 6)
+    for _ in range(horizon):
+        V_next = torch.gather(V_stack[-1], 1, flat_idx).reshape(B, N, 6)
+        V_stack.append((reward + discount * V_next).amax(dim=2))
+    V_stack = V_stack[::-1]  # [0] = V_0 (horizon steps left)
+    start = (((robot_cell * 2) * M_shard + init_shardmask) * M_urn + init_urncode)
+
+    env = envs.to(device)
+    state = env.reset(num_rollouts=B)
+    idx = start.clone()
+    batch = torch.arange(B, device=device)
+    transitions = []
+    for t in range(horizon):
+        Q = reward[batch, idx] + discount * torch.gather(
+            V_stack[t + 1], 1, next_idx[batch, idx]
+        )  # [B, 6]
+        action = Q.argmax(dim=1)
+        next_state = env.step(state, action)
+        transitions.append(Transition(state=state, action=action, next_state=next_state))
+        state = next_state
+        idx = next_idx[batch, idx, action]
+    return Rollout(transitions=_stack(transitions, dim=1))
 
 
 # # #
